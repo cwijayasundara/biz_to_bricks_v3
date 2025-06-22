@@ -1,0 +1,45 @@
+# Core FastAPI and server dependencies
+fastapi==0.115.12
+uvicorn==0.34.2
+pydantic==2.11.4
+python-multipart==0.0.20
+
+# Environment and configuration
+python-dotenv==1.1.0
+nest-asyncio==1.6.0
+
+# LangChain ecosystem
+langchain==0.3.25
+langchain-core==0.3.58
+langchain-community==0.3.23
+langchain-openai==0.3.16
+langchain-pinecone==0.2.5
+langchain-text-splitters
+
+# LlamaIndex and parsing
+llama-parse==0.6.21
+llama-index-core==0.12.34.post1
+llama-index
+
+# Pinecone vector database
+pinecone==6.0.2
+pinecone-text==0.10.0
+
+# OpenAI
+openai==1.77.0
+
+# Document processing
+unstructured[md]==0.17.2
+
+# Cloud storage
+google-cloud-storage==2.14.0
+
+# Utility libraries
+requests>=2.31.0
+trustcall
+lark
+jq
+
+# Testing (optional for production)
+pytest
+pytest-asyncio
