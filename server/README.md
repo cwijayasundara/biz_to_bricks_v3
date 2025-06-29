@@ -64,9 +64,8 @@ Cloud Run containers have ephemeral storage, meaning files are lost when contain
 The following directories are automatically mapped to Cloud Storage buckets:
 - `uploaded_files` → `{project-id}-uploaded-files`
 - `parsed_files` → `{project-id}-parsed-files` 
-- `edited_files` → `{project-id}-edited-files`
-- `summarized_files` → `{project-id}-summarized-files`
 - `bm25_indexes` → `{project-id}-bm25-indexes`
+- `generated_questions` → `{project-id}-generated-questions`
 
 ### Quick Deployment (Automated)
 
@@ -211,9 +210,8 @@ docker run -d -p 8004:8004 --name doc-server --env-file .env \
     -e STORAGE_MODE=local \
     -v $(pwd)/uploaded_files:/app/uploaded_files \
     -v $(pwd)/parsed_files:/app/parsed_files \
-    -v $(pwd)/edited_files:/app/edited_files \
-    -v $(pwd)/summarized_files:/app/summarized_files \
     -v $(pwd)/bm25_indexes:/app/bm25_indexes \
+    -v $(pwd)/generated_questions:/app/generated_questions \
     document-processing-server
 ```
 

@@ -33,7 +33,6 @@ class CloudStorageManager:
         self.buckets = {
             'uploaded_files': f"{self.bucket_prefix}-uploaded-files",
             'parsed_files': f"{self.bucket_prefix}-parsed-files", 
-            'summarized_files': f"{self.bucket_prefix}-summarized-files",
             'bm25_indexes': f"{self.bucket_prefix}-bm25-indexes",
             'generated_questions': f"{self.bucket_prefix}-generated-questions"
         }

@@ -54,7 +54,8 @@ def create_index():
 
 def document_exists_in_pinecone(file_name: str) -> bool:
     """
-    Check if a document exists in the Pinecone index.
+    Check if a document exists in the Pinecone index by looking for vectors
+    with the source metadata matching the file name.
     
     Args:
         file_name: The name of the file to check
@@ -75,21 +76,75 @@ def document_exists_in_pinecone(file_name: str) -> bool:
             print(f"Namespace '{namespace}' not found in index")
             return False
         
-        # Query the index to see if vectors for this document exist
-        # Use a simple query embedding to search
-        query_embedding = embeddings.embed_query(f"filename:{file_name}")
-
-        query_response = index.query(
-            vector=query_embedding,
-            top_k=1,
-            include_metadata=True,
-            namespace=namespace,
-            filter={"source": file_name}
-        )
-        
-        # If we get any matches, the document exists
-        return len(query_response.get('matches', [])) > 0
+        # Query the index with a proper embedding to find matching documents
+        # Use a simple search to find any vectors with matching source metadata
+        try:
+            # Create a simple query embedding
+            query_embedding = embeddings.embed_query("document check")
+            
+            query_response = index.query(
+                vector=query_embedding,
+                top_k=100,  # Get more results to ensure we find matches
+                include_metadata=True,
+                namespace=namespace,
+                filter={"source": file_name}
+            )
+            
+            # If we get any matches, the document exists
+            document_exists = len(query_response.get('matches', [])) > 0
+            print(f"Document {file_name} {'exists' if document_exists else 'does not exist'} in Pinecone")
+            
+            # Also check if there are vectors with the expected ID pattern
+            base_filename = file_name.split(".")[0] if "." in file_name else file_name
+            expected_id = f"{base_filename}_doc"
+            
+            # Try to fetch by ID as well
+            try:
+                fetch_response = index.fetch(ids=[expected_id], namespace=namespace)
+                if hasattr(fetch_response, 'vectors') and fetch_response.vectors:
+                    print(f"Found document by ID: {expected_id}")
+                    return True
+                elif hasattr(fetch_response, 'get') and fetch_response.get('vectors', {}):
+                    print(f"Found document by ID: {expected_id}")
+                    return True
+            except Exception as fetch_error:
+                print(f"Could not fetch by ID {expected_id}: {fetch_error}")
+            
+            return document_exists
+            
+        except Exception as query_error:
+            print(f"Error querying for document {file_name}: {query_error}")
+            return False
     
     except Exception as e:
         print(f"Error checking if document exists: {e}")
+        return False
+
+
+def delete_document_from_pinecone(file_name: str) -> bool:
+    """
+    Delete all vectors for a specific document from the Pinecone index.
+    
+    Args:
+        file_name: The name of the file to delete from Pinecone
+        
+    Returns:
+        bool: True if deletion was successful, False otherwise
+    """
+    print(f"Deleting document {file_name} from Pinecone")
+    try:
+        index = create_index()
+        namespace = "biz-to-bricks-namespace"
+        
+        # Delete vectors matching the source filter
+        delete_response = index.delete(
+            filter={"source": file_name},
+            namespace=namespace
+        )
+        
+        print(f"Successfully deleted document {file_name} from Pinecone")
+        return True
+        
+    except Exception as e:
+        print(f"Error deleting document {file_name} from Pinecone: {e}")
         return False

@@ -84,8 +84,6 @@ ipython_config.py
 # Server data directories
 server/uploaded_files/
 server/parsed_files/
-server/edited_files/
-server/summarized_files/
 server/generated_questions/
 server/bm25_indexes/
 

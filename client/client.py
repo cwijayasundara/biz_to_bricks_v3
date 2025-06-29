@@ -5,8 +5,8 @@ import json
 from pathlib import Path
 import sys
 # Configuration
-# BASE_URL = "http://localhost:8004"
-BASE_URL = "https://document-processing-service-yawfj7f47q-uc.a.run.app"
+BASE_URL = "http://localhost:8004"
+# BASE_URL = "https://document-processing-service-yawfj7f47q-uc.a.run.app"
 UPLOAD_API_URL = f"{BASE_URL}/uploadfile/"
 LIST_FILES_API_URL = f"{BASE_URL}/listfiles/uploaded_files"
 PARSE_FILE_API_URL = f"{BASE_URL}/parsefile/"
@@ -15,6 +15,7 @@ LIST_FILE_FOR_SUMMARIZE = f"{BASE_URL}/listfiles/parsed_files"
 SUMMARIZE_CONTENT_API_URL_BASE = f"{BASE_URL}/summarizecontent"
 GENERATE_QUESTIONS_API_URL_BASE = f"{BASE_URL}/generatequestions"
 INGEST_DOCUMENTS_API_URL = f"{BASE_URL}/ingestdocuments/"
+SAVE_AND_INGEST_API_URL = f"{BASE_URL}/saveandingst/"
 HYBRID_SEARCH_API_URL = f"{BASE_URL}/hybridsearch/"
 SAMPLE_FILES_DIR = Path("../docs")  # Path to docs folder with sample files
 
@@ -86,7 +87,7 @@ def main():
     st.write("Upload, view, parse, and summarize documents using FastAPI backend.")
     
     # Create tabs for different functionality
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📤 Upload", "📋 View Files", "📝 Parse Files", "📊 Summarize", "❓ Generate Questions", "📚 Ingest Documents", "🔍 Hybrid Search"])
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(["📤 Upload", "📋 View Files", "📝 Parse Files", "📊 Summarize", "❓ Generate Questions", "📚 Ingest Documents", "💾📚 Save & Ingest", "🔍 Hybrid Search"])
     
     with tab1:
         upload_files()
@@ -107,6 +108,9 @@ def main():
         ingest_documents_tab()
 
     with tab7:
+        save_and_ingest_tab()
+
+    with tab8:
         hybrid_search_tab()
 
 def upload_files():
@@ -242,7 +246,12 @@ def display_parsed_file(filename):
                 )
                 
                 # Save Changes Button inside expander
-                save_clicked = st.button("💾 Save Changes", key=f"save_{filename}")
+                col1, col2 = st.columns(2)
+                with col1:
+                    save_clicked = st.button("💾 Save Changes", key=f"save_{filename}")
+                with col2:
+                    save_ingest_clicked = st.button("💾📚 Save & Ingest", key=f"save_ingest_{filename}", type="primary")
+                
                 if save_clicked:
                     if edited_content != st.session_state.original_content[filename]:
                         with st.spinner("Saving changes..."):
@@ -256,6 +265,24 @@ def display_parsed_file(filename):
                             st.success(save_result.get("message", "Changes saved successfully!"))
                             # Update original content after save
                             st.session_state.original_content[filename] = edited_content
+                    else:
+                        st.info("No changes detected.")
+                
+                if save_ingest_clicked:
+                    if edited_content != st.session_state.original_content[filename]:
+                        with st.spinner("Saving changes and ingesting to search index..."):
+                            save_ingest_result = make_api_request(
+                                f"{SAVE_AND_INGEST_API_URL}{filename}", 
+                                method="post", 
+                                data={"content": edited_content}
+                            )
+                            
+                        if "error" not in save_ingest_result:
+                            st.success(save_ingest_result.get("message", "Changes saved and document ingested successfully!"))
+                            # Update original content after save
+                            st.session_state.original_content[filename] = edited_content
+                        else:
+                            st.error(f"Save & Ingest failed: {save_ingest_result['error']}")
                     else:
                         st.info("No changes detected.")
             
@@ -340,11 +367,12 @@ def generate_questions_tab():
     with st.expander("About Question Generation", expanded=False):
         st.write("""
         This feature uses AI to generate relevant questions based on parsed documents.
+        Questions are generated fresh each time for the most relevant results.
         
         Process:
         1. Select a file from the parsed documents list
         2. Choose the number of questions to generate (1-50)
-        3. Click 'Generate Questions' to create questions
+        3. Click 'Generate Questions' to create fresh questions
         4. The questions will be displayed below
         """)
     
@@ -372,10 +400,10 @@ def generate_questions_tab():
             )
         
         if selected_file != "None":
-            st.info(f"Ready to generate {num_questions} questions for: {selected_file}")
+            st.info(f"Ready to generate {num_questions} fresh questions for: {selected_file}")
             
             # Generate Questions Button
-            if st.button("❓ Generate Questions", key=f"generate_btn_{selected_file}_{num_questions}", type="primary"):
+            if st.button("❓ Generate Fresh Questions", key=f"generate_btn_{selected_file}_{num_questions}", type="primary"):
                 generate_questions_and_display(selected_file, num_questions)
                 
             # Display questions if they exist in session state
@@ -396,7 +424,7 @@ def generate_questions_and_display(filename, num_questions):
         with st.expander("Document Content", expanded=True):
             st.markdown(st.session_state[edited_key])
     
-    with st.spinner(f"Generating {num_questions} questions for {filename}..."):
+    with st.spinner(f"Generating {num_questions} fresh questions for {filename}..."):
         result = make_api_request(
             f"{GENERATE_QUESTIONS_API_URL_BASE}/{filename}?number_of_questions={num_questions}",
             handle_error=False
@@ -407,7 +435,7 @@ def generate_questions_and_display(filename, num_questions):
         if questions_key in st.session_state:
             del st.session_state[questions_key]
     else:
-        st.success("Questions generated successfully!")
+        st.success("Fresh questions generated successfully!")
         st.session_state[questions_key] = result.get("questions", "No questions available.")
         
         # Show metadata if available
@@ -441,6 +469,103 @@ def ingest_documents_tab():
                 st.success(result.get("message", "Ingestion successful!"))
     else:
         st.info("Please select a .md file to ingest.")
+
+def save_and_ingest_tab():
+    st.header("Save & Ingest Documents")
+    
+    with st.expander("About Save & Ingest", expanded=False):
+        st.write("""
+        This feature combines content saving and document ingestion in one operation.
+        
+        Process:
+        1. Select a file from the parsed documents list
+        2. Edit the content in the text area
+        3. Click 'Save & Ingest' to save changes and add to search index
+        4. The document will be saved and immediately available for hybrid search
+        """)
+    
+    # Get the list of files from the server
+    files = fetch_files(LIST_FILE_FOR_SUMMARIZE, "Loading parsed files...")
+    
+    if files:
+        selected_file = st.selectbox(
+            "Select a parsed file to edit and ingest", 
+            ["None"] + files, 
+            key="save_ingest_file_select",
+            help="Choose a parsed file to edit and ingest to the search index"
+        )
+        
+        if selected_file != "None":
+            # Load existing content
+            try:
+                with st.spinner(f"Loading content for {selected_file}..."):
+                    # Try to load the parsed file content
+                    parsed_result = make_api_request(f"{PARSE_FILE_API_URL}{selected_file}")
+                
+                if "error" not in parsed_result:
+                    text_content = parsed_result.get("text_content", "")
+                    
+                    st.info(f"Editing: {selected_file}")
+                    
+                    # Content editor
+                    edited_content = st.text_area(
+                        "Edit the document content:",
+                        text_content,
+                        height=400,
+                        key=f"save_ingest_content_{selected_file}",
+                        help="Make your changes to the document content before saving and ingesting"
+                    )
+                    
+                    # Show content length info
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.caption(f"Characters: {len(edited_content):,}")
+                    with col2:
+                        st.caption(f"Words: {len(edited_content.split()):,}")
+                    
+                    # Save & Ingest Button
+                    if st.button("💾📚 Save & Ingest", key=f"save_ingest_btn_{selected_file}", type="primary"):
+                        save_and_ingest_content(selected_file, edited_content)
+                        
+                    # Display previous operation status if it exists in session state
+                    status_key = f"save_ingest_status_{selected_file}"
+                    if status_key in st.session_state:
+                        if st.session_state[status_key]["success"]:
+                            st.success(st.session_state[status_key]["message"])
+                        else:
+                            st.error(st.session_state[status_key]["message"])
+                else:
+                    st.error(f"Failed to load content: {parsed_result.get('error', 'Unknown error')}")
+                    
+            except Exception as e:
+                st.error(f"Error loading file content: {str(e)}")
+    else:
+        st.info("No parsed files found on the server. Parse files first using the 'Parse Files' tab.")
+
+def save_and_ingest_content(filename, content):
+    """Save content and ingest document in a single operation"""
+    status_key = f"save_ingest_status_{filename}"
+    
+    with st.spinner(f"Saving and ingesting {filename}..."):
+        result = make_api_request(
+            f"{SAVE_AND_INGEST_API_URL}{filename}",
+            method="post",
+            data={"content": content},
+            handle_error=False
+        )
+    
+    if "error" in result:
+        st.session_state[status_key] = {
+            "success": False,
+            "message": f"Error: {result['error']}"
+        }
+        st.error(f"Save & Ingest failed: {result['error']}")
+    else:
+        st.session_state[status_key] = {
+            "success": True,
+            "message": result.get("message", "Content saved and document ingested successfully!")
+        }
+        st.success("✅ Content saved and document ingested successfully! The document is now searchable.")
 
 def hybrid_search_tab():
     st.header("Hybrid Search")

@@ -7,7 +7,7 @@ load_dotenv()
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-llm = ChatOpenAI(model="gpt-4o-mini", 
+llm = ChatOpenAI(model="gpt-4.1-mini", 
                  api_key=OPENAI_API_KEY)
 
 QUESTION_GEN_PROMPT = """
@@ -23,6 +23,7 @@ The questions should be in the following format:
 2. Question 2
 3. Question 3
 
+return a list of questions in a json format.
 
 {text}
 

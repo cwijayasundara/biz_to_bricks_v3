@@ -2,8 +2,10 @@
 import nest_asyncio
 try:
     nest_asyncio.apply()
-except RuntimeError:
-    pass  # Already applied
+except (RuntimeError, ValueError) as e:
+    # Skip if already applied or incompatible loop type (e.g., uvloop)
+    print(f"Skipping nest_asyncio patch: {e}")
+    pass
 
 from fastapi import FastAPI, UploadFile, File, Body, HTTPException, status, Path, Query
 from fastapi.responses import JSONResponse
@@ -29,7 +31,6 @@ logger = logging.getLogger(__name__)
 # Define path constants
 UPLOADED_FILE_PATH = "uploaded_files"
 PARSED_FILE_PATH = "parsed_files"
-SUMMARIZED_FILE_PATH = "summarized_files"
 GENERATED_QUESTIONS_PATH = "generated_questions"
 
 # Initialize file manager
@@ -83,7 +84,7 @@ class SearchQuery(BaseModel):
 # Helper functions
 def ensure_directories_exist():
     """Ensure all required directories exist"""
-    for directory in [UPLOADED_FILE_PATH, PARSED_FILE_PATH, SUMMARIZED_FILE_PATH, GENERATED_QUESTIONS_PATH]:
+    for directory in [UPLOADED_FILE_PATH, PARSED_FILE_PATH, GENERATED_QUESTIONS_PATH]:
         create_directory(directory)
 
 def get_file_path(directory: str, filename: str, extension: Optional[str] = None) -> str:
@@ -174,7 +175,7 @@ async def delete_file(
     logger.info(f"Deleting file: {directory}/{filename}")
     
     # Validate directory
-    valid_directories = ["uploaded_files", "parsed_files", "summarized_files", "bm25_indexes", "generated_questions"]
+    valid_directories = ["uploaded_files", "parsed_files", "bm25_indexes", "generated_questions"]
     if directory not in valid_directories:
         logger.error(f"Invalid directory: {directory}")
         raise HTTPException(
@@ -309,12 +310,70 @@ async def save_content(
             detail=f"Error saving content: {str(e)}"
         )
 
+@app.post("/saveandingst/{filename}", response_model=SuccessResponse)
+async def save_content_and_ingest(
+    filename: str = Path(..., description="Name of the file to save content for and ingest"),
+    content_update: ContentUpdate = Body(..., description="Content to save")
+):
+    """
+    Save edited content to the parsed files directory and then ingest the document 
+    to Pinecone and BM25 index in a single operation.
+    
+    Args:
+        filename: Name of the file to save content for (can be with or without extension)
+        content_update: The content to save
+        
+    Returns:
+        Success message with details of both operations
+    """
+    logger.info(f"Saving content and ingesting for file: {filename}")
+    
+    try:
+        # Extract base filename without extension to ensure consistency
+        base_filename = FilePath(filename).stem
+        logger.info(f"Using base filename: {base_filename}")
+        
+        # Step 1: Save the content
+        logger.info(f"Step 1: Saving content for {base_filename}")
+        saved_path = file_manager.save_file(PARSED_FILE_PATH, f"{base_filename}.md", content_update.content)
+        logger.info(f"Content saved to {saved_path}")
+        
+        # Step 2: Ingest the document to Pinecone and BM25
+        logger.info(f"Step 2: Ingesting documents for {base_filename}")
+        ingest_documents_to_pinecone_and_bm25(base_filename)
+        logger.info(f"Documents ingested to Pinecone and BM25 index for {base_filename}")
+        
+        return {
+            "status": "success", 
+            "message": f"Content for {base_filename} saved and ingested successfully. Document is now searchable in the hybrid search system."
+        }
+        
+    except FileNotFoundError as e:
+        logger.error(f"File not found during save and ingest for {filename}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"File {base_filename if 'base_filename' in locals() else filename} not found during ingestion process"
+        )
+    except Exception as e:
+        logger.error(f"Error during save and ingest for {filename}: {str(e)}")
+        # Check if the error occurred during save or ingest
+        if "ingest" in str(e).lower():
+            error_detail = f"Content was saved but ingestion failed: {str(e)}"
+        else:
+            error_detail = f"Error during save and ingest: {str(e)}"
+        
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=error_detail
+        )
+
 @app.get("/summarizecontent/{filename}")
 async def summarize_content(
     filename: str = Path(..., description="Name of the file to summarize")
 ):
     """
     Parse a file from the parsed_files directory and return its summary.
+    Summary is generated fresh each time without saving to disk.
     
     Args:
         filename: Name of the file to summarize (can be with or without extension)
@@ -330,35 +389,23 @@ async def summarize_content(
         base_filename = FilePath(filename).stem
         logger.info(f"Using base filename: {base_filename}")
         
-        # Check if the summarized file already exists
-        if file_manager.file_exists(SUMMARIZED_FILE_PATH, base_filename):
-            logger.info(f"Using existing summarized file: {base_filename}")
-            summary = file_manager.load_file(SUMMARIZED_FILE_PATH, base_filename)
-            metadata = {
-                "file_name": base_filename, 
-                "file_path": f"{SUMMARIZED_FILE_PATH}/{base_filename}"
-            }
-            return {"summary": summary, "metadata": metadata}
-        
         # Load content from parsed file
-        text_content = ""
         if file_manager.file_exists(PARSED_FILE_PATH, f"{base_filename}.md"):
             logger.info(f"Loading parsed file for summarization: {base_filename}.md")
             text_content = file_manager.load_file(PARSED_FILE_PATH, f"{base_filename}.md")
-            metadata = {"source": "parsed_file"}
         else:
             raise FileNotFoundError(f"No file found for {base_filename} in parsed_files")
         
-        logger.info(f"Generating summary for {base_filename}")
+        logger.info(f"Generating fresh summary for {base_filename}")
         summary = summarize_text_content(text_content)
         
-        # Save the summary
-        metadata["file_name"] = base_filename
-        metadata["file_path"] = f"{SUMMARIZED_FILE_PATH}/{base_filename}"
-        
-        saved_path = file_manager.save_file(SUMMARIZED_FILE_PATH, base_filename, summary)
+        metadata = {
+            "file_name": base_filename,
+            "source": "parsed_file",
+            "generated_fresh": True
+        }
             
-        logger.info(f"Summary saved to {saved_path}")
+        logger.info(f"Summary generated successfully for {base_filename}")
         return {"summary": summary, "metadata": metadata}
         
     except FileNotFoundError as e:
@@ -425,6 +472,7 @@ async def generate_questions_for_file(
 ):
     """
     Generate questions from a file in the parsed_files directory.
+    Questions are generated fresh each time without saving to disk.
     
     Args:
         filename: Name of the file to generate questions for (can be with or without extension)
@@ -441,38 +489,24 @@ async def generate_questions_for_file(
         base_filename = FilePath(filename).stem
         logger.info(f"Using base filename: {base_filename}")
         
-        # Check if the generated questions file already exists
-        questions_filename = f"{base_filename}_questions_{number_of_questions}.txt"
-        if file_manager.file_exists(GENERATED_QUESTIONS_PATH, questions_filename):
-            logger.info(f"Using existing generated questions file: {questions_filename}")
-            questions = file_manager.load_file(GENERATED_QUESTIONS_PATH, questions_filename)
-            metadata = {
-                "file_name": base_filename, 
-                "file_path": f"{GENERATED_QUESTIONS_PATH}/{questions_filename}",
-                "number_of_questions": number_of_questions
-            }
-            return {"questions": questions, "metadata": metadata}
-        
         # Load content from parsed file
-        text_content = ""
         if file_manager.file_exists(PARSED_FILE_PATH, f"{base_filename}.md"):
             logger.info(f"Loading parsed file for question generation: {base_filename}.md")
             text_content = file_manager.load_file(PARSED_FILE_PATH, f"{base_filename}.md")
-            metadata = {"source": "parsed_file"}
         else:
             raise FileNotFoundError(f"No file found for {base_filename} in parsed_files")
         
-        logger.info(f"Generating {number_of_questions} questions for {base_filename}")
+        logger.info(f"Generating fresh {number_of_questions} questions for {base_filename}")
         questions = generate_questions(text_content, number_of_questions)
         
-        # Save the generated questions
-        metadata["file_name"] = base_filename
-        metadata["file_path"] = f"{GENERATED_QUESTIONS_PATH}/{questions_filename}"
-        metadata["number_of_questions"] = number_of_questions
-        
-        saved_path = file_manager.save_file(GENERATED_QUESTIONS_PATH, questions_filename, questions)
+        metadata = {
+            "file_name": base_filename,
+            "source": "parsed_file",
+            "number_of_questions": number_of_questions,
+            "generated_fresh": True
+        }
             
-        logger.info(f"Generated questions saved to {saved_path}")
+        logger.info(f"Questions generated successfully for {base_filename}")
         return {"questions": questions, "metadata": metadata}
         
     except FileNotFoundError as e:

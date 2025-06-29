@@ -20,7 +20,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . ./
 
 # Create directories for uploaded, parsed, edited and summarized files
-RUN mkdir -p uploaded_files parsed_files edited_files summarized_files bm25_indexes
+RUN mkdir -p uploaded_files parsed_files bm25_indexes generated_questions
 
 # Expose the port the app runs on
 EXPOSE 8004

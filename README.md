@@ -84,6 +84,12 @@ GOOGLE_CLOUD_PROJECT=your-gcp-project-id
 cd server
 python start_server.py --storage local --reload
 ```
+Or
+
+```bash
+cd server
+uvicorn app:app --host 0.0.0.0 --port 8004 --loop asyncio --reload
+```
 
 **2. Start the Client (New Terminal):**
 ```bash
@@ -136,7 +142,6 @@ The server automatically creates these directories:
 server/
 ├── uploaded_files/       # Original uploaded documents
 ├── parsed_files/         # Markdown versions (editable)
-├── summarized_files/     # AI-generated summaries
 ├── generated_questions/  # AI-generated questions ✨ NEW
 └── bm25_indexes/        # Search index files
 ```
@@ -218,7 +223,6 @@ The deployment creates these buckets for persistent storage:
 |-------------|---------|------------------|
 | `{project-id}-uploaded-files` | Original documents | `uploaded_files/` |
 | `{project-id}-parsed-files` | Parsed markdown | `parsed_files/` |
-| `{project-id}-summarized-files` | AI summaries | `summarized_files/` |
 | `{project-id}-generated-questions` | AI questions | `generated_questions/` |
 | `{project-id}-bm25-indexes` | Search indexes | `bm25_indexes/` |
 
@@ -292,14 +296,13 @@ cd server
 docker build -t document-processing-server .
 
 # Create local directories
-mkdir -p uploaded_files parsed_files summarized_files generated_questions bm25_indexes
+mkdir -p uploaded_files parsed_files generated_questions bm25_indexes
 
 # Run the container
 docker run -d -p 8004:8004 --name doc-server \
   --env-file ../.env \
   -v $(pwd)/uploaded_files:/app/uploaded_files \
   -v $(pwd)/parsed_files:/app/parsed_files \
-  -v $(pwd)/summarized_files:/app/summarized_files \
   -v $(pwd)/generated_questions:/app/generated_questions \
   -v $(pwd)/bm25_indexes:/app/bm25_indexes \
   document-processing-server
@@ -402,7 +405,7 @@ python start_server.py --port 8005
 **🔴 Permission Issues**
 ```bash
 # Fix directory permissions
-chmod -R 755 server/uploaded_files server/parsed_files server/summarized_files
+chmod -R 755 server/uploaded_files server/parsed_files
 ```
 
 **🔴 Connection Timeout**
@@ -443,7 +446,7 @@ docker stop doc-server 2>/dev/null || true
 docker rm doc-server 2>/dev/null || true
 
 # Clear processed files (optional)
-rm -rf server/uploaded_files/* server/parsed_files/* server/summarized_files/* server/generated_questions/* server/bm25_indexes/*
+rm -rf server/uploaded_files/* server/parsed_files/* server/generated_questions/* server/bm25_indexes/*
 
 # Restart
 cd server && python start_server.py --storage local --reload

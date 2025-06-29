@@ -105,7 +105,7 @@ def validate_environment(storage_mode):
         print("✅ Using local filesystem storage")
         
         # Create local directories if they don't exist
-        directories = ['uploaded_files', 'parsed_files', 'summarized_files', 'bm25_indexes']
+        directories = ['uploaded_files', 'parsed_files', 'bm25_indexes']
         for directory in directories:
             Path(directory).mkdir(exist_ok=True)
         print(f"✅ Local directories ensured: {directories}")
@@ -149,7 +149,8 @@ def start_server(args):
         'app:app',
         '--host', args.host,
         '--port', str(args.port),
-        '--log-level', args.log_level
+        '--log-level', args.log_level,
+        '--loop', 'asyncio'  # Use asyncio loop for better nest_asyncio compatibility
     ]
     
     if args.reload:

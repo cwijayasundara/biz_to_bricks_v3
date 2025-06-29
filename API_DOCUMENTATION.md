@@ -48,7 +48,7 @@ List all files in a specified directory.
 
 **Path Parameters:**
 - `directory` (string, required): Directory to list files from
-  - Valid values: `uploaded_files`, `parsed_files`, `summarized_files`, `bm25_indexes`, `generated_questions`
+  - Valid values: `uploaded_files`, `parsed_files`, `bm25_indexes`, `generated_questions`
 
 **Response:**
 ```json
@@ -124,7 +124,47 @@ curl -X POST "http://localhost:8004/savecontent/example" \
 
 ---
 
-### 5. Content Summarization
+### 5. Save Content & Ingest Documents
+
+#### `POST /saveandingst/{filename}`
+
+Save edited content to the parsed files directory and immediately ingest the document to Pinecone vector database and BM25 index in a single operation.
+
+**Path Parameters:**
+- `filename` (string, required): Name of the file to save content for and ingest
+
+**Request Body:**
+```json
+{
+  "content": "# Updated Document\n\nEdited content that will be saved and indexed..."
+}
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "message": "Content for example saved and ingested successfully. Document is now searchable in the hybrid search system."
+}
+```
+
+**Example:**
+```bash
+curl -X POST "http://localhost:8004/saveandingst/example" \
+  -H "Content-Type: application/json" \
+  -d '{"content": "Updated content that will be indexed"}'
+```
+
+**Features:**
+- Combines content saving and document ingestion in one atomic operation
+- Automatically creates vector embeddings for semantic search
+- Updates BM25 index for keyword search
+- Makes the document immediately available for hybrid search
+- Provides detailed error handling for both save and ingest operations
+
+---
+
+### 6. Content Summarization
 
 #### `GET /summarizecontent/{filename}`
 
@@ -139,7 +179,8 @@ Generate an AI-powered summary of a parsed document.
   "summary": "This document discusses...",
   "metadata": {
     "file_name": "example",
-    "file_path": "summarized_files/example"
+    "source": "parsed_file",
+    "generated_fresh": true
   }
 }
 ```
@@ -151,11 +192,12 @@ curl "http://localhost:8004/summarizecontent/example"
 
 ---
 
-### 6. Question Generation
+### 7. Question Generation
 
 #### `GET /generatequestions/{filename}`
 
 Generate relevant questions based on a parsed document using AI.
+Questions are generated fresh each time without saving to disk.
 
 **Path Parameters:**
 - `filename` (string, required): Name of the file to generate questions for
@@ -171,8 +213,9 @@ Generate relevant questions based on a parsed document using AI.
   "questions": "1. What is the main topic of this document?\n2. Who are the key stakeholders mentioned?\n...",
   "metadata": {
     "file_name": "example",
-    "file_path": "generated_questions/example_questions_10.txt",
-    "number_of_questions": 10
+    "source": "parsed_file",
+    "number_of_questions": 10,
+    "generated_fresh": true
   }
 }
 ```
@@ -182,9 +225,15 @@ Generate relevant questions based on a parsed document using AI.
 curl "http://localhost:8004/generatequestions/example?number_of_questions=15"
 ```
 
+**Features:**
+- Generates questions fresh each time for most relevant results
+- No caching or disk storage of generated questions
+- Configurable number of questions (1-50)
+- Uses the latest parsed document content
+
 ---
 
-### 7. Document Ingestion
+### 8. Document Ingestion
 
 #### `POST /ingestdocuments/{filename}`
 
@@ -207,7 +256,7 @@ curl -X POST "http://localhost:8004/ingestdocuments/example.md"
 
 ---
 
-### 8. Hybrid Search
+### 9. Hybrid Search
 
 #### `POST /hybridsearch/`
 
@@ -236,7 +285,7 @@ curl -X POST "http://localhost:8004/hybridsearch/" \
 
 ---
 
-### 9. File Deletion
+### 10. File Deletion
 
 #### `DELETE /deletefile/{directory}/{filename}`
 
@@ -244,7 +293,7 @@ Delete a file from a specified directory.
 
 **Path Parameters:**
 - `directory` (string, required): Directory containing the file
-  - Valid values: `uploaded_files`, `parsed_files`, `summarized_files`, `bm25_indexes`, `generated_questions`
+  - Valid values: `uploaded_files`, `parsed_files`, `bm25_indexes`, `generated_questions`
 - `filename` (string, required): Name of the file to delete
 
 **Response:**
@@ -364,10 +413,11 @@ curl -X DELETE "http://localhost:8004/deletefile/uploaded_files/example.pdf"
 The API manages files across several directories:
 
 - `uploaded_files/`: Original uploaded documents
-- `parsed_files/`: Markdown versions of parsed documents
-- `summarized_files/`: AI-generated summaries
-- `generated_questions/`: AI-generated questions
+- `parsed_files/`: Markdown versions of parsed documents  
+- `generated_questions/`: AI-generated questions (not saved to disk)
 - `bm25_indexes/`: BM25 search indexes
+
+Note: Summaries and questions are generated fresh each time and not stored on disk.
 
 ---
 
@@ -387,4 +437,4 @@ Currently, no rate limits are implemented. For production use, consider implemen
 
 ## Support
 
-For issues or questions, please refer to the project repository or contact the development team. 
+For issues or questions, please refer to the project repository or contact the development team.

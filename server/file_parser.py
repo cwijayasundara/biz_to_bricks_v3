@@ -15,9 +15,9 @@ _ = load_dotenv()
 try:
     nest_asyncio.apply()
     print("Applied nest_asyncio for nested event loop support")
-except RuntimeError as e:
-    # If already applied, that's fine
-    print(f"nest_asyncio already configured: {str(e)}")
+except (RuntimeError, ValueError) as e:
+    # Skip if already applied or incompatible loop type (e.g., uvloop)
+    print(f"Skipping nest_asyncio patch: {e}")
 
 llama_cloud_api_key = os.getenv("LLAMA_CLOUD_API_KEY")
 
