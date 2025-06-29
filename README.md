@@ -6,12 +6,13 @@ A comprehensive document processing and querying system with FastAPI backend and
 
 - **📄 Document Upload & Storage** - Support for PDF, DOCX, and other file formats
 - **🔍 Advanced PDF Parsing** - LlamaParse integration for high-quality text extraction
-- **✏️ Document Editing** - Edit parsed content with real-time saving
+- **✏️ Document Editing** - Edit parsed content with real-time saving and auto-ingestion
 - **📝 AI Summarization** - Generate concise summaries using OpenAI GPT
-- **❓ Question Generation** - Create relevant questions from document content
+- **❓ Question Generation** - Create relevant questions from document content (1-50 questions)
 - **🔎 Hybrid Search** - Combine vector search (Pinecone) with BM25 keyword search
-- **☁️ Cloud Storage** - Persistent file storage with Google Cloud Storage
-- **📊 Interactive Dashboard** - User-friendly Streamlit interface
+- **🔄 Smart Upsert** - Prevent document duplicates with intelligent update functionality
+- **☁️ Cloud Storage** - Seamless local/cloud storage with automatic environment detection
+- **📊 Interactive Dashboard** - User-friendly Streamlit interface with 7 specialized tabs
 
 ## 🏗️ Architecture
 
@@ -21,11 +22,12 @@ biz_to_bricks_v3/
 │   ├── app.py                 # Main API application (9 endpoints)
 │   ├── file_parser.py         # Document parsing with LlamaParse
 │   ├── doc_summarizer.py      # AI text summarization
-│   ├── question_gen.py        # AI question generation ✨ NEW
+│   ├── question_gen.py        # AI question generation
 │   ├── hybrid_search.py       # Vector + BM25 search
-│   ├── ingest_docs.py         # Document ingestion pipeline
+│   ├── ingest_docs.py         # Document ingestion with upsert
+│   ├── pinecone_util.py       # Pinecone vector operations
 │   ├── cloud_storage_util.py  # GCS integration
-│   ├── file_util_enhanced.py  # File management utilities
+│   ├── file_util_enhanced.py  # Unified file management
 │   ├── start_server.py        # Server startup script
 │   ├── deploy_to_cloudrun.py  # Automated GCP deployment
 │   ├── requirements.txt       # Python dependencies
@@ -52,7 +54,7 @@ biz_to_bricks_v3/
 Create a `.env` file in the **project root** with the following credentials:
 
 ```env
-# OpenAI API (for summarization and question generation)
+# OpenAI API (for summarization and embeddings)
 OPENAI_API_KEY=sk-your-openai-api-key-here
 
 # LlamaParse API (for document parsing)
@@ -62,8 +64,11 @@ LLAMA_CLOUD_API_KEY=llx-your-llama-cloud-api-key-here
 PINECONE_API_KEY=your-pinecone-api-key-here
 PINECONE_ENVIRONMENT=your-pinecone-environment
 
-# Google Cloud (for production deployment)
+# Google Cloud (for production deployment - optional for local dev)
 GOOGLE_CLOUD_PROJECT=your-gcp-project-id
+
+# Storage Configuration (optional - auto-detects by default)
+STORAGE_MODE=auto  # Options: auto, local, cloud
 ```
 
 ### Where to Get API Keys
@@ -138,13 +143,23 @@ streamlit run client.py
 
 The server automatically creates these directories:
 
-```
+```text
 server/
 ├── uploaded_files/       # Original uploaded documents
 ├── parsed_files/         # Markdown versions (editable)
-├── generated_questions/  # AI-generated questions ✨ NEW
-└── bm25_indexes/        # Search index files
+├── generated_questions/  # AI-generated questions
+├── bm25_indexes/        # Search index files
+└── summarized_files/    # Summary cache (deprecated)
 ```
+
+### 💡 Smart Storage System
+
+The application features intelligent storage management:
+
+- **🏠 Local Development**: Uses local filesystem directories
+- **☁️ Cloud Deployment**: Automatically switches to Google Cloud Storage buckets
+- **🔄 Auto-Detection**: Detects environment and chooses appropriate storage
+- **🔄 Upsert Capability**: Prevents document duplicates when re-uploading
 
 ---
 
@@ -321,36 +336,42 @@ streamlit run client.py
 ## 📖 Complete User Workflow
 
 ### 1. **📤 Upload Documents**
-   - Go to "Upload" tab
-   - Select files from `docs/` directory
-   - Click "Upload File"
+
+- Go to "Upload" tab
+- Select files from `docs/` directory or your own files
+- Click "Upload File"
 
 ### 2. **📝 Parse Documents**
-   - Go to "Parse Files" tab
-   - Select uploaded file
-   - Click "Parse File"
-   - Edit content if needed and save
+
+- Go to "Parse Files" tab
+- Select uploaded file
+- Click "Parse File" (automatically saves as .md)
+- Edit content if needed and save
 
 ### 3. **📊 Generate Summary**
-   - Go to "Summarize" tab
-   - Select parsed file
-   - Click "Generate Summary"
 
-### 4. **❓ Generate Questions** ✨ NEW
-   - Go to "Generate Questions" tab
-   - Select parsed file
-   - Choose number of questions (1-50)
-   - Click "Generate Questions"
+- Go to "Summarize" tab
+- Select parsed file
+- Click "Generate Summary"
 
-### 5. **📚 Ingest Documents**
-   - Go to "Ingest Documents" tab
-   - Select .md file
-   - Click "Ingest Document"
+### 4. **❓ Generate Questions**
+
+- Go to "Generate Questions" tab
+- Select parsed file
+- Choose number of questions (1-50)
+- Click "Generate Questions"
+
+### 5. **📚 Save & Ingest Documents**
+
+- **Option A**: Go to "Save & Ingest" tab → Select file → Save + Auto-ingest
+- **Option B**: Go to "Ingest Documents" tab → Select .md file → Manual ingest
+- Documents are automatically upserted (no duplicates created)
 
 ### 6. **🔍 Search Documents**
-   - Go to "Hybrid Search" tab
-   - Enter search query
-   - Get AI-powered results
+
+- Go to "Hybrid Search" tab
+- Enter search query
+- Get AI-powered results combining vector and keyword search
 
 ---
 
@@ -364,17 +385,18 @@ Comprehensive API documentation is available:
 
 ### Quick API Overview
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/uploadfile/` | POST | Upload documents |
-| `/listfiles/{directory}` | GET | List files |
-| `/parsefile/{filename}` | GET | Parse documents |
-| `/savecontent/{filename}` | POST | Save edited content |
-| `/summarizecontent/{filename}` | GET | Generate summaries |
-| `/generatequestions/{filename}` | GET | Generate questions ✨ |
-| `/ingestdocuments/{filename}` | POST | Add to search index |
-| `/hybridsearch/` | POST | Search documents |
-| `/deletefile/{directory}/{filename}` | DELETE | Delete files |
+| Endpoint | Method | Purpose | New Features |
+|----------|--------|---------|--------------|
+| `/uploadfile/` | POST | Upload documents | - |
+| `/listfiles/{directory}` | GET | List files | - |
+| `/parsefile/{filename}` | GET | Parse documents | - |
+| `/savecontent/{filename}` | POST | Save edited content | - |
+| `/saveandingst/{filename}` | POST | Save + auto-ingest | ✨ NEW |
+| `/summarizecontent/{filename}` | GET | Generate summaries | - |
+| `/generatequestions/{filename}` | GET | Generate questions | - |
+| `/ingestdocuments/{filename}` | POST | Add to search index | 🔄 Upsert support |
+| `/hybridsearch/` | POST | Search documents | - |
+| `/deletefile/{directory}/{filename}` | DELETE | Delete files | - |
 
 ---
 
@@ -472,6 +494,8 @@ cd server && python deploy_to_cloudrun.py --project-id your-project-id
 | **💰 Cost** | Free | Free | Pay-per-use |
 | **🔒 Security** | Basic | Containerized | Production-grade |
 | **📊 Monitoring** | Manual | Docker logs | Cloud Monitoring |
+| **🔄 Upsert Support** | ✅ Full support | ✅ Full support | ✅ Full support |
+| **☁️ Storage Mode** | Local filesystem | Local filesystem | Auto cloud storage |
 | **🎯 Best For** | Development | Local production | Production/sharing |
 
 ---
@@ -489,6 +513,7 @@ cd server && python deploy_to_cloudrun.py --project-id your-project-id
 ## 🎉 Quick Start Summary
 
 **For Development:**
+
 ```bash
 # Terminal 1: Start server
 cd server && python start_server.py --storage local --reload
@@ -500,9 +525,10 @@ cd client && streamlit run client.py
 ```
 
 **For Production:**
+
 ```bash
 # One-command deployment to Google Cloud
 cd server && python deploy_to_cloudrun.py --project-id your-project-id
 ```
 
-**Happy document processing! 🚀📄**
+Happy document processing! 🚀📄

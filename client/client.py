@@ -5,8 +5,8 @@ import json
 from pathlib import Path
 import sys
 # Configuration
-BASE_URL = "http://localhost:8004"
-# BASE_URL = "https://document-processing-service-yawfj7f47q-uc.a.run.app"
+# BASE_URL = "http://localhost:8004"
+BASE_URL = "https://document-processing-service-yawfj7f47q-uc.a.run.app"
 UPLOAD_API_URL = f"{BASE_URL}/uploadfile/"
 LIST_FILES_API_URL = f"{BASE_URL}/listfiles/uploaded_files"
 PARSE_FILE_API_URL = f"{BASE_URL}/parsefile/"
