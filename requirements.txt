@@ -16,10 +16,17 @@ langchain-openai==0.3.16
 langchain-pinecone==0.2.5
 langchain-text-splitters
 
+# LangGraph - Latest AI workflow orchestration
+langgraph>=0.2.81
+langgraph-checkpoint>=2.1.3
+
 # LlamaIndex and parsing
 llama-parse==0.6.21
 llama-index-core==0.12.34.post1
 llama-index
+
+# Data processing
+pandas>=2.0.0
 
 # Pinecone vector database
 pinecone==6.0.2

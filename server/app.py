@@ -80,6 +80,7 @@ class FilesListResponse(BaseModel):
 class SearchQuery(BaseModel):
     """Model for search queries"""
     query: str = Field(..., description="The search query")
+    debug: bool = Field(False, description="Include debug information in response")
 
 # Helper functions
 def ensure_directories_exist():
@@ -355,12 +356,19 @@ async def save_content_and_ingest(
             detail=f"File {base_filename if 'base_filename' in locals() else filename} not found during ingestion process"
         )
     except Exception as e:
-        logger.error(f"Error during save and ingest for {filename}: {str(e)}")
-        # Check if the error occurred during save or ingest
-        if "ingest" in str(e).lower():
-            error_detail = f"Content was saved but ingestion failed: {str(e)}"
+        error_str = str(e)
+        logger.error(f"Error during save and ingest for {filename}: {error_str}")
+        
+        # Provide specific guidance for common errors
+        if "ingest" in error_str.lower():
+            if "Metadata size" in error_str and "exceeds the limit" in error_str:
+                error_detail = f"Content was saved successfully, but ingestion failed due to document size. The document will be automatically chunked on retry. Please try ingesting again."
+            elif "400" in error_str and "Bad Request" in error_str:
+                error_detail = f"Content was saved successfully, but Pinecone ingestion failed. Document chunking has been improved to resolve this issue. Please try again."
+            else:
+                error_detail = f"Content was saved successfully, but ingestion failed: {error_str}"
         else:
-            error_detail = f"Error during save and ingest: {str(e)}"
+            error_detail = f"Error during save and ingest: {error_str}"
         
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -427,6 +435,7 @@ async def summarize_content(
 async def ingest_documents(filename: str = Path(..., description="Name of the file to ingest")):
     """
     Ingest documents to Pinecone and BM25 index.
+    Documents are automatically chunked to avoid metadata size limits.
     """
     try:
         # Extract base filename without extension to ensure consistency
@@ -434,7 +443,7 @@ async def ingest_documents(filename: str = Path(..., description="Name of the fi
         logger.info(f"Ingesting documents for base filename: {base_filename}")
         
         ingest_documents_to_pinecone_and_bm25(base_filename)
-        return {"message": f"Documents ingested to Pinecone and BM25 index for {base_filename}"}
+        return {"message": f"Documents successfully ingested to Pinecone and BM25 index for {base_filename}"}
     except FileNotFoundError as e:
         logger.error(f"File not found for ingestion: {e}")
         base_filename = FilePath(filename).stem if filename else filename
@@ -443,10 +452,20 @@ async def ingest_documents(filename: str = Path(..., description="Name of the fi
             content={"error": f"File {base_filename} not found in server/parsed_files. Please parse the file first."}
         )
     except Exception as e:
-        logger.error(f"Error during ingestion for {filename}: {str(e)}")
+        error_str = str(e)
+        logger.error(f"Error during ingestion for {filename}: {error_str}")
+        
+        # Provide specific guidance for common errors
+        if "Metadata size" in error_str and "exceeds the limit" in error_str:
+            error_msg = f"Document too large for Pinecone (metadata limit exceeded). The document has been automatically chunked to resolve this issue. Please try again."
+        elif "400" in error_str and "Bad Request" in error_str:
+            error_msg = f"Pinecone API error: {error_str}. Document chunking has been improved to avoid this issue."
+        else:
+            error_msg = f"Failed to ingest file: {error_str}"
+            
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"error": f"Failed to ingest file: {str(e)}"}
+            content={"error": error_msg}
         )
 
 # Hybrid search
@@ -454,10 +473,18 @@ async def ingest_documents(filename: str = Path(..., description="Name of the fi
 async def hybrid_search(search_query: SearchQuery):
     """
     Perform a hybrid search using Pinecone and BM25.
+    Enhanced to handle entity queries and provide debug information.
     """
     try:
-        result = execure_hybrid_chain(search_query.query)
-        return {"result": result}
+        if search_query.debug:
+            # Use debug version that returns additional information
+            from hybrid_search import search_with_debug_info
+            result = search_with_debug_info(search_query.query)
+            return result
+        else:
+            # Standard search
+            result = execure_hybrid_chain(search_query.query)
+            return {"result": result}
     except Exception as e:
         logger.error(f"Error during hybrid search: {str(e)}")
         return JSONResponse(

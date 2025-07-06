@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 # Configuration
 # BASE_URL = "http://localhost:8004"
-BASE_URL = "https://document-processing-service-yawfj7f47q-uc.a.run.app"
+BASE_URL = "https://document-processing-service-38231329931.us-central1.run.app"
 UPLOAD_API_URL = f"{BASE_URL}/uploadfile/"
 LIST_FILES_API_URL = f"{BASE_URL}/listfiles/uploaded_files"
 PARSE_FILE_API_URL = f"{BASE_URL}/parsefile/"
@@ -253,38 +253,40 @@ def display_parsed_file(filename):
                     save_ingest_clicked = st.button("💾📚 Save & Ingest", key=f"save_ingest_{filename}", type="primary")
                 
                 if save_clicked:
-                    if edited_content != st.session_state.original_content[filename]:
-                        with st.spinner("Saving changes..."):
-                            save_result = make_api_request(
-                                f"{SAVE_CONTENT_API_URL}{filename}", 
-                                method="post", 
-                                data={"content": edited_content}
-                            )
-                            
-                        if "error" not in save_result:
+                    with st.spinner("Saving content..."):
+                        save_result = make_api_request(
+                            f"{SAVE_CONTENT_API_URL}{filename}", 
+                            method="post", 
+                            data={"content": edited_content}
+                        )
+                        
+                    if "error" not in save_result:
+                        if edited_content != st.session_state.original_content[filename]:
                             st.success(save_result.get("message", "Changes saved successfully!"))
-                            # Update original content after save
-                            st.session_state.original_content[filename] = edited_content
+                        else:
+                            st.success("Content saved successfully!")
+                        # Update original content after save
+                        st.session_state.original_content[filename] = edited_content
                     else:
-                        st.info("No changes detected.")
+                        st.error(f"Save failed: {save_result['error']}")
                 
                 if save_ingest_clicked:
-                    if edited_content != st.session_state.original_content[filename]:
-                        with st.spinner("Saving changes and ingesting to search index..."):
-                            save_ingest_result = make_api_request(
-                                f"{SAVE_AND_INGEST_API_URL}{filename}", 
-                                method="post", 
-                                data={"content": edited_content}
-                            )
-                            
-                        if "error" not in save_ingest_result:
+                    with st.spinner("Saving content and ingesting to search index..."):
+                        save_ingest_result = make_api_request(
+                            f"{SAVE_AND_INGEST_API_URL}{filename}", 
+                            method="post", 
+                            data={"content": edited_content}
+                        )
+                        
+                    if "error" not in save_ingest_result:
+                        if edited_content != st.session_state.original_content[filename]:
                             st.success(save_ingest_result.get("message", "Changes saved and document ingested successfully!"))
-                            # Update original content after save
-                            st.session_state.original_content[filename] = edited_content
                         else:
-                            st.error(f"Save & Ingest failed: {save_ingest_result['error']}")
+                            st.success("Content saved and document ingested successfully!")
+                        # Update original content after save
+                        st.session_state.original_content[filename] = edited_content
                     else:
-                        st.info("No changes detected.")
+                        st.error(f"Save & Ingest failed: {save_ingest_result['error']}")
             
             # Metadata Expander
             with st.expander("Metadata", expanded=False):
@@ -570,16 +572,98 @@ def save_and_ingest_content(filename, content):
 def hybrid_search_tab():
     st.header("Hybrid Search")
     st.write("Perform a hybrid search using Pinecone and BM25.")
-    query = st.text_input("Enter your search query", placeholder="e.g. 'What is the main idea of the document?'")
-    if st.button("Search", type="primary"):
-        if query:
+    
+    with st.expander("About Hybrid Search", expanded=False):
+        st.write("""
+        This hybrid search combines:
+        - **Vector Search (Pinecone)**: Finds semantically similar content
+        - **Keyword Search (BM25)**: Finds exact word/phrase matches
+        
+        **Tips for better results:**
+        - For specific names: "Miss Sandstrom" or "Sandstrom details"
+        - For concepts: "What happened to passengers in first class?"
+        - For data queries: "List all details about [person/thing]"
+        
+        **Optimized for**: Entity queries, structured data, and specific information retrieval.
+        """)
+    
+    # Search input
+    col1, col2 = st.columns([4, 1])
+    with col1:
+        # Initialize query from session state if set by example buttons
+        default_query = st.session_state.get("example_query", "")
+        query = st.text_input(
+            "Enter your search query", 
+            value=default_query,
+            placeholder="e.g. 'List all details of Miss Sandstrom' or 'What information do we have about the Sandstrom family?'",
+            help="Try specific entity names or detailed questions for best results"
+        )
+        # Clear the example query from session state after using it
+        if "example_query" in st.session_state:
+            del st.session_state["example_query"]
+    
+    with col2:
+        debug_mode = st.checkbox(
+            "Debug Mode", 
+            help="Show retrieved documents and search details"
+        )
+    
+    # Example queries
+    st.write("**Example queries:**")
+    example_queries = [
+        "List all details of Miss Sandstrom",
+        "What information do we have about the Sandstrom family?", 
+        "Show me all passengers with cabin G6",
+        "Who survived from first class?",
+        "What happened to 4-year-old passengers?"
+    ]
+    
+    cols = st.columns(len(example_queries))
+    for i, example in enumerate(example_queries):
+        if cols[i].button(f"Try: {example[:20]}...", key=f"example_{i}"):
+            st.session_state["example_query"] = example
+            st.rerun()
+    
+    # Search execution
+    if st.button("🔍 Search", type="primary", disabled=not query.strip()):
+        if query.strip():
             with st.spinner("Performing hybrid search..."):
-                result = make_api_request(HYBRID_SEARCH_API_URL, method="post", data={"query": query})
+                search_data = {
+                    "query": query.strip(),
+                    "debug": debug_mode
+                }
+                result = make_api_request(HYBRID_SEARCH_API_URL, method="post", data=search_data)
+                
                 if "error" in result:
                     st.error(result["error"])
                 else:
-                    st.success("Hybrid search completed successfully!")
-                    st.write(result.get("result", "No results found."))
+                    if debug_mode and "debug" in result:
+                        # Show debug information
+                        debug_info = result["debug"]
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.success("Search completed successfully!")
+                            st.write(f"**Query:** {debug_info['query']}")
+                            st.write(f"**Documents found:** {debug_info['documents_found']}")
+                        
+                        # Show the answer
+                        st.subheader("Answer:")
+                        st.write(result.get("result", "No answer generated."))
+                        
+                        # Show retrieved documents
+                        with st.expander("🔍 Retrieved Documents (Debug)", expanded=True):
+                            for doc in debug_info["documents"]:
+                                st.write(f"**Document {doc['index']}:**")
+                                if doc["metadata"]:
+                                    st.json(doc["metadata"])
+                                st.text(doc["preview"])
+                                st.divider()
+                    else:
+                        # Standard response
+                        st.success("Hybrid search completed successfully!")
+                        st.subheader("Answer:")
+                        st.write(result.get("result", "No results found."))
         else:
             st.info("Please enter a search query.")
 

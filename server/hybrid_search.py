@@ -125,8 +125,8 @@ def create_hybrid_retriever():
             sparse_encoder=bm25_encoder, 
             index=index,
             text_key="text",
-            alpha=0.5,
-            top_k=3,
+            alpha=0.3,  # Favor BM25 (sparse) for exact name matches
+            top_k=10,   # Retrieve more documents for better coverage
             namespace="biz-to-bricks-namespace"
         )
         
@@ -142,16 +142,40 @@ logger.info("Initializing hybrid search retriever...")
 retriever = create_hybrid_retriever()
 
 def format_docs(docs):
-    """Format the documents into a string."""
-    return "\n\n".join(doc.page_content for doc in docs)
+    """Format the documents into a string with enhanced context."""
+    if not docs:
+        return "No relevant documents found."
+    
+    formatted_docs = []
+    for i, doc in enumerate(docs, 1):
+        # Add document separator and source info if available
+        doc_text = f"Document {i}"
+        if hasattr(doc, 'metadata') and doc.metadata:
+            source = doc.metadata.get('source', 'Unknown')
+            doc_text += f" (Source: {source})"
+        
+        doc_text += f":\n{doc.page_content}\n"
+        formatted_docs.append(doc_text)
+    
+    return "\n" + "="*50 + "\n".join(formatted_docs)
 
-# Prompt template
-template = """Answer the question based only on the following context:
+# Enhanced prompt template for better entity queries and structured data
+template = """You are an AI assistant that answers questions based on the provided context. 
+
+Context Information:
 {context}
+
+Instructions:
+- Answer the question using ONLY the information provided in the context above
+- If asked about specific people, entities, or data points, provide ALL relevant details found
+- For tabular data, present information in a clear, organized format
+- If the question asks for "all details" or "everything" about someone/something, include all available attributes
+- If the information is not in the context, clearly state that it's not available
+- Be comprehensive and specific in your answers
 
 Question: {question}
 
-"""
+Answer:"""
 
 prompt = ChatPromptTemplate.from_template(template)
 
@@ -164,12 +188,58 @@ hybrid_chain = (
 )
 
 def execure_hybrid_chain(query):
-    """Execute the hybrid chain."""
+    """Execute the hybrid chain with enhanced logging and debugging."""
     logger.info(f"Executing hybrid search for query: {query}")
     try:
+        # Log the retrieval process for debugging
+        logger.info("Retrieving relevant documents...")
+        docs = retriever.invoke(query)
+        logger.info(f"Retrieved {len(docs)} documents")
+        
+        # Log the documents for debugging (first 100 chars of each)
+        for i, doc in enumerate(docs):
+            preview = doc.page_content[:100].replace('\n', ' ')
+            logger.info(f"Doc {i+1} preview: {preview}...")
+            if hasattr(doc, 'metadata') and doc.metadata:
+                logger.info(f"Doc {i+1} metadata: {doc.metadata}")
+        
+        # Execute the chain
         result = hybrid_chain.invoke(query)
         logger.info("Hybrid search completed successfully")
         return result
     except Exception as e:
         logger.error(f"Error executing hybrid search: {e}")
+        raise
+
+def search_with_debug_info(query):
+    """Execute search and return both result and debug information."""
+    logger.info(f"Executing debug search for query: {query}")
+    try:
+        # Get documents for debugging
+        docs = retriever.invoke(query)
+        
+        # Format debug info
+        debug_info = {
+            "query": query,
+            "documents_found": len(docs),
+            "documents": []
+        }
+        
+        for i, doc in enumerate(docs):
+            doc_info = {
+                "index": i + 1,
+                "preview": doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content,
+                "metadata": doc.metadata if hasattr(doc, 'metadata') else {}
+            }
+            debug_info["documents"].append(doc_info)
+        
+        # Execute the chain
+        result = hybrid_chain.invoke(query)
+        
+        return {
+            "result": result,
+            "debug": debug_info
+        }
+    except Exception as e:
+        logger.error(f"Error in debug search: {e}")
         raise

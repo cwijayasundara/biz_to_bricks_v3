@@ -5,9 +5,11 @@ from langchain_pinecone import PineconeVectorStore
 from pinecone_text.sparse import BM25Encoder
 from file_util_enhanced import load_edited_file_or_parsed_file, get_file_manager
 from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pinecone_util import create_index
 import tempfile
 import logging
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -26,24 +28,94 @@ file_manager = get_file_manager()
 embeddings = OpenAIEmbeddings(api_key=openai_api_key, 
                               model="text-embedding-3-large")
 
+def calculate_metadata_size(metadata):
+    """Calculate the size of metadata in bytes when JSON serialized."""
+    return len(json.dumps(metadata).encode('utf-8'))
+
+def truncate_metadata(metadata, max_size=35000):  # Leave buffer under 40KB limit
+    """Truncate metadata fields to fit within Pinecone's size limits."""
+    # Create a copy to avoid modifying the original
+    truncated_metadata = dict(metadata)
+    
+    # Remove or truncate large fields
+    fields_to_check = ['content', 'text', 'summary', 'description']
+    
+    for field in fields_to_check:
+        if field in truncated_metadata:
+            field_value = str(truncated_metadata[field])
+            # If this field exists and is large, truncate it
+            if len(field_value) > 1000:  # If field is large
+                truncated_metadata[field] = field_value[:500] + "... [truncated]"
+    
+    # Check final size and remove non-essential fields if still too large
+    current_size = calculate_metadata_size(truncated_metadata)
+    if current_size > max_size:
+        # Keep only essential fields
+        essential_fields = ['source', 'chunk_id', 'total_chunks']
+        truncated_metadata = {k: v for k, v in truncated_metadata.items() 
+                            if k in essential_fields}
+    
+    return truncated_metadata
+
 def ingest_documents_to_pinecone_hybrid(file_name: str):
     """
-    This function ingests documents to Pinecone with upsert functionality.
+    This function ingests documents to Pinecone with upsert functionality and proper chunking.
     If the document already exists, it will be updated with new content.
+    Documents are split into chunks to avoid Pinecone metadata size limits.
     """
     try:
         logger.info(f"Loading content for file: {file_name}")
         text_content, metadata = load_edited_file_or_parsed_file(file_name)
 
         # Use consistent ID generation based on the source file
-        # This ensures the same document gets the same ID for upsert behavior
         base_filename = file_name.split(".")[0] if "." in file_name else file_name
-        document_id = f"{base_filename}_doc"
         
         # Update metadata to include source for filtering
         metadata["source"] = file_name
         
-        documents = [Document(page_content=text_content, metadata=metadata)]
+        # Initialize text splitter for large documents
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=4000,  # Smaller chunks to avoid metadata size issues
+            chunk_overlap=200,
+            length_function=len,
+            separators=["\n\n", "\n", " ", ""]
+        )
+        
+        # Split the document into chunks
+        chunks = text_splitter.split_text(text_content)
+        logger.info(f"Split document into {len(chunks)} chunks")
+        
+        # Create documents for each chunk with proper metadata
+        documents = []
+        document_ids = []
+        
+        for i, chunk in enumerate(chunks):
+            # Create chunk-specific metadata
+            chunk_metadata = metadata.copy()
+            chunk_metadata.update({
+                "chunk_id": i,
+                "total_chunks": len(chunks),
+                "chunk_size": len(chunk)
+            })
+            
+            # Truncate metadata to ensure it fits within Pinecone limits
+            chunk_metadata = truncate_metadata(chunk_metadata)
+            
+            # Verify metadata size
+            metadata_size = calculate_metadata_size(chunk_metadata)
+            if metadata_size > 40000:  # 40KB limit
+                logger.warning(f"Chunk {i} metadata still too large ({metadata_size} bytes), further truncating...")
+                # Emergency truncation - keep only essential fields
+                chunk_metadata = {
+                    "source": file_name,
+                    "chunk_id": i,
+                    "total_chunks": len(chunks)
+                }
+            
+            # Create document and ID for this chunk
+            doc = Document(page_content=chunk, metadata=chunk_metadata)
+            documents.append(doc)
+            document_ids.append(f"{base_filename}_chunk_{i}")
 
         logger.info("Creating/accessing Pinecone index...")
         index = create_index()
@@ -60,7 +132,7 @@ def ingest_documents_to_pinecone_hybrid(file_name: str):
         except Exception as e:
             logger.warning(f"Error deleting existing vectors (may not exist): {str(e)}")
 
-        logger.info("Uploading documents to Pinecone with consistent IDs...")
+        logger.info(f"Uploading {len(documents)} document chunks to Pinecone...")
         
         # Create vector store and add documents with consistent IDs
         vector_store = PineconeVectorStore(
@@ -69,10 +141,10 @@ def ingest_documents_to_pinecone_hybrid(file_name: str):
             namespace="biz-to-bricks-namespace"
         )
         
-        # Add documents with consistent ID to enable upsert behavior
-        vector_store.add_documents(documents=documents, ids=[document_id])
+        # Add documents with consistent IDs to enable upsert behavior
+        vector_store.add_documents(documents=documents, ids=document_ids)
         
-        logger.info("Successfully uploaded/updated documents in Pinecone")
+        logger.info(f"Successfully uploaded/updated {len(documents)} chunks for document: {file_name}")
         return vector_store
     except Exception as e:
         logger.error(f"Error while ingesting documents: {str(e)}")
@@ -82,7 +154,7 @@ def create_bm25_index(file_name: str):
     """
     This function creates a new BM25 index and saves it using the file manager.
     If an index already exists for the file, it will be overwritten.
-    (works with both local storage and cloud storage).
+    BM25 works with the full document content (not chunked) for better keyword matching.
     """
     try:
         logger.info(f"Creating BM25 index for file: {file_name}")
@@ -104,8 +176,20 @@ def create_bm25_index(file_name: str):
         # Load content from parsed/edited file
         text_content, metadata = load_edited_file_or_parsed_file(file_name)
 
-        # Fit the encoder with the text content
-        bm25_encoder.fit([text_content])
+        # For BM25, we can use the full document or split into smaller sections
+        # Split into paragraphs or sections for better BM25 performance
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=2000,  # Smaller chunks for BM25
+            chunk_overlap=100,
+            length_function=len,
+            separators=["\n\n", "\n", ". ", " "]
+        )
+        
+        text_chunks = text_splitter.split_text(text_content)
+        logger.info(f"Created {len(text_chunks)} text chunks for BM25 indexing")
+
+        # Fit the encoder with the text chunks
+        bm25_encoder.fit(text_chunks)
 
         # Save the BM25 index using a temporary file and file manager
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as temp_file:
