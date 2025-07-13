@@ -1202,39 +1202,145 @@ def hybrid_search_tab() -> None:
                                     st.text(doc["preview"])
                                     st.divider()
                     else:
-                        # Standard response - show all results
-                        st.success("Hybrid search completed successfully!")
-                        
-                        # Show document search results
-                        doc_search = result.get("document_search", {})
-                        if doc_search.get("success") and doc_search.get("result"):
-                            st.subheader("📄 Document Search Results:")
-                            doc_result = doc_search["result"]
-                            if isinstance(doc_result, dict) and "result" in doc_result:
-                                st.write(doc_result["result"])
-                            else:
-                                st.write(doc_result)
-                        elif doc_search.get("error"):
-                            st.error(f"Document search error: {doc_search['error']}")
-                        
-                        # Show pandas agent results
-                        pandas_search = result.get("pandas_agent_search", {})
-                        if pandas_search.get("results"):
-                            st.subheader("📊 Excel/CSV Search Results:")
-                            for file_result in pandas_search["results"]:
-                                st.write(f"**{file_result['filename']} ({file_result['file_type'].upper()}):**")
-                                st.write(file_result["answer"])
-                                st.divider()
-                        
-                        # Show summary
+                        # Standard response - show results based on search strategy
                         summary = result.get("summary", {})
+                        search_strategy = summary.get("search_strategy", "comprehensive")
+                        
+                        # Check if we have an intelligent reranked result
+                        if search_strategy == "intelligent_reranking":
+                            best_result = result.get("best_result", {})
+                            if best_result:
+                                st.success("🤖 Intelligent search completed successfully!")
+                                st.info("✨ AI analyzed and reranked results from all sources")
+                                
+                                # Show the best result prominently
+                                st.subheader("🎯 Best Answer:")
+                                st.write(best_result.get("answer", "No answer available"))
+                                
+                                # Show source and explanation
+                                source = best_result.get("source", "unknown")
+                                explanation = best_result.get("explanation", "")
+                                ai_choice = summary.get("ai_choice", "none")
+                                
+                                col1, col2 = st.columns([2, 1])
+                                with col1:
+                                    if source == "document_search":
+                                        st.info("📄 **Source:** Document Search (Text Analysis)")
+                                    elif source == "pandas_agent":
+                                        st.info("📊 **Source:** Data Analysis (Excel/CSV)")
+                                    elif source == "combined":
+                                        st.info("🔗 **Source:** Combined Results")
+                                    elif source == "none":
+                                        st.warning("❌ **Source:** No Results Found")
+                                    else:
+                                        st.info(f"**Source:** {source}")
+                                
+                                with col2:
+                                    if ai_choice != "none":
+                                        st.caption(f"AI Choice: {ai_choice}")
+                                
+                                if explanation:
+                                    with st.expander("🧠 AI Reasoning", expanded=False):
+                                        st.write(explanation)
+                                
+                                # Show individual results in expandable sections
+                                col1, col2 = st.columns(2)
+                                
+                                with col1:
+                                    doc_search = result.get("document_search", {})
+                                    if doc_search.get("success") and doc_search.get("result"):
+                                        with st.expander("📄 Document Search Results", expanded=False):
+                                            doc_result = doc_search["result"]
+                                            if isinstance(doc_result, dict) and "result" in doc_result:
+                                                st.write(doc_result["result"])
+                                            else:
+                                                st.write(doc_result)
+                                    elif doc_search.get("searched"):
+                                        with st.expander("📄 Document Search Results", expanded=False):
+                                            st.write("No document results found.")
+                                
+                                with col2:
+                                    pandas_search = result.get("pandas_agent_search", {})
+                                    if pandas_search.get("results"):
+                                        with st.expander("📊 Data Analysis Results", expanded=False):
+                                            for file_result in pandas_search["results"]:
+                                                st.write(f"**{file_result['filename']} ({file_result['file_type'].upper()}):**")
+                                                st.write(file_result["answer"])
+                                                st.divider()
+                                    elif pandas_search.get("searched"):
+                                        with st.expander("📊 Data Analysis Results", expanded=False):
+                                            st.write("No data analysis results found.")
+                            else:
+                                st.error("No best result available from intelligent search.")
+                        
+                        elif search_strategy == "targeted":
+                            st.success("🎯 Targeted search completed successfully!")
+                            if selected_source:
+                                file_info = get_file_type_info(selected_source)
+                                st.info(f"Searched only in: {file_info['icon']} {selected_source.replace('.md', '')} ({file_info['type']})")
+                        
+                            # Show document search results
+                            doc_search = result.get("document_search", {})
+                            if doc_search.get("searched", True):
+                                if doc_search.get("success") and doc_search.get("result"):
+                                    st.subheader("📄 Document Search Results:")
+                                    doc_result = doc_search["result"]
+                                    if isinstance(doc_result, dict) and "result" in doc_result:
+                                        st.write(doc_result["result"])
+                                    else:
+                                        st.write(doc_result)
+                                elif doc_search.get("error"):
+                                    st.error(f"Document search error: {doc_search['error']}")
+                                elif doc_search.get("searched"):
+                                    st.warning("No document results found.")
+                            
+                            # Show pandas agent results
+                            pandas_search = result.get("pandas_agent_search", {})
+                            if pandas_search.get("searched", True):
+                                if pandas_search.get("results"):
+                                    st.subheader("📊 Excel/CSV Search Results:")
+                                    for file_result in pandas_search["results"]:
+                                        st.write(f"**{file_result['filename']} ({file_result['file_type'].upper()}):**")
+                                        st.write(file_result["answer"])
+                                        st.divider()
+                                elif pandas_search.get("searched"):
+                                    st.warning("No Excel/CSV results found.")
+                            
+                            # Show what was skipped (if any)
+                            search_methods = summary.get("search_methods", {})
+                            skipped_methods = []
+                            if not doc_search.get("searched", True):
+                                skipped_methods.append("Document search (not targeting documents)")
+                            if not pandas_search.get("searched", True):
+                                skipped_methods.append("Excel/CSV search (not targeting Excel/CSV files)")
+                            
+                            if skipped_methods:
+                                with st.expander("ℹ️ Skipped Search Methods", expanded=False):
+                                    for method in skipped_methods:
+                                        st.write(f"• {method}")
+                        
+                        else:
+                            # Fallback for other search strategies
+                            st.success("🌐 Comprehensive search completed successfully!")
+                            st.info("Searched across all available sources")
+                        
+                        # Show summary for all strategies
                         if summary:
-                            with st.expander("Search Summary", expanded=False):
+                            with st.expander("📊 Search Summary", expanded=False):
                                 st.json(summary)
                         
-                        # If no results found anywhere
-                        if not doc_search.get("success") and not pandas_search.get("results"):
-                            st.warning("No results found in document search or Excel/CSV files.")
+                        # Check for no results only if not using intelligent reranking
+                        if search_strategy != "intelligent_reranking":
+                            doc_search = result.get("document_search", {})
+                            pandas_search = result.get("pandas_agent_search", {})
+                            doc_has_results = doc_search.get("success") and doc_search.get("result")
+                            excel_has_results = pandas_search.get("results") and len(pandas_search.get("results", [])) > 0
+                            
+                            if not doc_has_results and not excel_has_results:
+                                if search_strategy == "targeted":
+                                    st.warning("No results found in the selected source document.")
+                                else:
+                                    st.warning("No results found in any source.")
         else:
             st.info("Please enter a search query.")
 
