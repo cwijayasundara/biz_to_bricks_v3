@@ -172,6 +172,10 @@ tramp
 ehthumbs.db
 Thumbs.db
 
+# AI Assistant Files
+.claude/
+.cursor/
+
 # Windows
 Thumbs.db
 ehthumbs.db
@@ -206,6 +210,11 @@ $RECYCLE.BIN/
 *.bak
 *.backup
 *.orig
+
+# Test files
+sample_data.csv
+excel_data.db
+test_*.db
 
 # Node.js (if any frontend tools are used)
 node_modules/

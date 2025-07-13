@@ -13,6 +13,8 @@ from file_util_enhanced import get_file_manager, create_directory, list_files as
 from file_parser import parse_file_with_llama_parse
 from doc_summarizer import summarize_text_content
 from question_gen import generate_questions
+from faq_gen import generate_faq
+from excel_agent import create_excel_agent
 from pydantic import BaseModel, Field
 import os
 from pathlib import Path as FilePath
@@ -21,6 +23,7 @@ from typing import Dict, List, Any, Optional, Union
 from contextlib import asynccontextmanager
 from ingest_docs import ingest_documents_to_pinecone_and_bm25
 from hybrid_search import execure_hybrid_chain
+import json
 
 logging.basicConfig(
     level=logging.INFO,
@@ -71,6 +74,9 @@ class FileResponse(BaseModel):
     """Model for file-related responses"""
     filename: str = Field(..., description="Name of the file")
     file_path: str = Field(..., description="Path where the file is stored")
+    file_type: str = Field(default="document", description="Type of file (excel, csv, or document)")
+    is_excel_csv: bool = Field(default=False, description="Whether the file is Excel or CSV")
+    message: str = Field(default="File uploaded successfully", description="Upload message")
 
 class FilesListResponse(BaseModel):
     """Model for file listing responses"""
@@ -81,6 +87,9 @@ class SearchQuery(BaseModel):
     """Model for search queries"""
     query: str = Field(..., description="The search query")
     debug: bool = Field(False, description="Include debug information in response")
+    source_document: Optional[str] = Field(None, description="Optional source document to filter search results")
+
+
 
 # Helper functions
 def ensure_directories_exist():
@@ -96,11 +105,33 @@ def get_file_path(directory: str, filename: str, extension: Optional[str] = None
         return str(FilePath(directory) / f"{base_name}{extension}")
     return str(FilePath(directory) / filename)
 
+def is_excel_or_csv_file(filename: str) -> bool:
+    """Check if a file is an Excel or CSV file based on its extension."""
+    if not filename:
+        return False
+    
+    extension = FilePath(filename).suffix.lower()
+    return extension in ['.csv', '.xlsx', '.xls']
+
+def get_file_type(filename: str) -> str:
+    """Get the file type (csv or excel) based on extension."""
+    if not filename:
+        return "unknown"
+    
+    extension = FilePath(filename).suffix.lower()
+    if extension == '.csv':
+        return "csv"
+    elif extension in ['.xlsx', '.xls']:
+        return "excel"
+    else:
+        return "unknown"
+
 # API Routes
 @app.post("/uploadfile/", response_model=FileResponse, status_code=status.HTTP_201_CREATED)
 async def upload_file(file: UploadFile = File(...)):
     """
     Upload a file to the server.
+    For Excel/CSV files, they will be handled by the Excel agent instead of parsing to vector database.
     
     Args:
         file: The file to upload
@@ -123,11 +154,29 @@ async def upload_file(file: UploadFile = File(...)):
         content = await file.read()
         saved_path = file_manager.save_binary_file(UPLOADED_FILE_PATH, file.filename, content)
         
+        # Check if this is an Excel or CSV file
+        is_excel_csv = is_excel_or_csv_file(file.filename)
+        file_type = get_file_type(file.filename)
+        
         logger.info(f"File saved to {saved_path}")
-        return {
-            "filename": file.filename, 
-            "file_path": saved_path
-        }
+        
+        if is_excel_csv:
+            logger.info(f"Detected {file_type} file: {file.filename}. Will be processed with LlamaParse and pandas agent.")
+            return {
+                "filename": file.filename, 
+                "file_path": saved_path,
+                "file_type": file_type,
+                "is_excel_csv": True,
+                "message": f"{file_type.upper()} file uploaded successfully. Use /parsefile and /ingestdocuments to process, then /hybridsearch for comprehensive search or /querypandas for DataFrame queries."
+            }
+        else:
+            return {
+                "filename": file.filename, 
+                "file_path": saved_path,
+                "file_type": "document",
+                "is_excel_csv": False,
+                "message": "Document uploaded successfully. Use /parsefile and /ingestdocuments to process, then /hybridsearch to query."
+            }
     except Exception as e:
         logger.error(f"Error saving file {file.filename}: {str(e)}")
         raise HTTPException(
@@ -221,7 +270,8 @@ async def delete_file(
 @app.get("/parsefile/{filename}")
 async def parse_uploaded_file(filename: str = Path(..., description="Name of the file to parse")):
     """
-    Parse an uploaded file into markdown format.
+    Parse an uploaded file into markdown format using LlamaParse.
+    Works for all file types including PDFs, Excel, and CSV files.
     
     Args:
         filename: Name of the file to parse
@@ -435,8 +485,10 @@ async def summarize_content(
 async def ingest_documents(filename: str = Path(..., description="Name of the file to ingest")):
     """
     Ingest documents to Pinecone and BM25 index.
+    All file types (PDF, Excel, CSV) are processed through the same pipeline.
     Documents are automatically chunked to avoid metadata size limits.
     """
+    
     try:
         # Extract base filename without extension to ensure consistency
         base_filename = FilePath(filename).stem
@@ -468,29 +520,219 @@ async def ingest_documents(filename: str = Path(..., description="Name of the fi
             content={"error": error_msg}
         )
 
+# Get available source documents
+@app.get("/sourcedocuments/", response_model=FilesListResponse)
+async def get_source_documents():
+    """
+    Get a list of all available source documents in the Pinecone index.
+    These can be used to filter hybrid search results.
+    
+    Returns:
+        List of unique source document names available for search filtering
+    """
+    try:
+        logger.info("Getting available source documents from Pinecone")
+        from pinecone_util import get_available_source_documents
+        
+        source_documents = get_available_source_documents()
+        
+        logger.info(f"Found {len(source_documents)} source documents")
+        return {"files": source_documents}
+        
+    except Exception as e:
+        logger.error(f"Error getting source documents: {str(e)}")
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": f"Failed to get source documents: {str(e)}"}
+        )
+
 # Hybrid search
 @app.post("/hybridsearch/")
 async def hybrid_search(search_query: SearchQuery):
     """
-    Perform a hybrid search using Pinecone and BM25.
-    Enhanced to handle entity queries and provide debug information.
+    Perform a comprehensive search across all data sources:
+    1. Document search (Pinecone/BM25) - includes parsed content from all file types
+    2. Excel/CSV pandas agent search - for DataFrame-specific queries
+    Provides unified results from both search methods.
     """
     try:
+        logger.info(f"Performing comprehensive search for: {search_query.query}")
+        
+        # Search documents using Pinecone/BM25
+        document_result = None
+        document_error = None
+        try:
+            if search_query.debug:
+                from hybrid_search import search_with_debug_info
+                document_result = search_with_debug_info(search_query.query, search_query.source_document)
+            else:
+                document_result = execure_hybrid_chain(search_query.query, search_query.source_document)
+        except Exception as e:
+            document_error = str(e)
+            logger.warning(f"Document search failed: {document_error}")
+        
+        # Search Excel/CSV files
+        excel_results = []
+        excel_errors = []
+        
+        try:
+            # Get all uploaded files
+            uploaded_files = file_manager.list_files(UPLOADED_FILE_PATH)
+            excel_csv_files = [f for f in uploaded_files if is_excel_or_csv_file(f)]
+            
+            logger.info(f"Found {len(excel_csv_files)} Excel/CSV files to search: {excel_csv_files}")
+            
+            # Search each Excel/CSV file
+            for filename in excel_csv_files:
+                try:
+                    file_path = file_manager.get_file_path(UPLOADED_FILE_PATH, filename)
+                    with create_excel_agent(file_path) as agent:
+                        answer = agent.query(search_query.query)
+                        data_summary = agent.get_data_summary()
+                        
+                        excel_results.append({
+                            "filename": filename,
+                            "file_type": get_file_type(filename),
+                            "answer": answer,
+                            "data_summary": data_summary
+                        })
+                        logger.info(f"Successfully searched Excel/CSV file: {filename}")
+                        
+                except Exception as e:
+                    error_msg = f"Error searching {filename}: {str(e)}"
+                    excel_errors.append(error_msg)
+                    logger.warning(error_msg)
+        
+        except Exception as e:
+            excel_errors.append(f"Error accessing Excel/CSV files: {str(e)}")
+            logger.warning(f"Excel/CSV search failed: {str(e)}")
+        
+        # Compile comprehensive results
+        filter_description = f" (filtered by: {search_query.source_document})" if search_query.source_document else ""
+        result = {
+            "query": search_query.query,
+            "source_filter": search_query.source_document,
+            "document_search": {
+                "description": f"Search results from Pinecone/BM25 (includes parsed content from all file types){filter_description}",
+                "success": document_result is not None,
+                "result": document_result if document_result else None,
+                "error": document_error
+            },
+            "pandas_agent_search": {
+                "description": "DataFrame-specific search results from Excel/CSV files using pandas agent",
+                "files_searched": len(excel_csv_files) if 'excel_csv_files' in locals() else 0,
+                "results": excel_results,
+                "errors": excel_errors
+            },
+            "summary": {
+                "total_sources": (1 if document_result else 0) + len(excel_results),
+                "has_document_results": document_result is not None,
+                "has_pandas_results": len(excel_results) > 0,
+                "search_successful": document_result is not None or len(excel_results) > 0,
+                "search_methods": {
+                    "document_search": "Pinecone/BM25 hybrid search on parsed text content",
+                    "pandas_search": "LangChain pandas agent for DataFrame operations"
+                }
+            }
+        }
+        
         if search_query.debug:
-            # Use debug version that returns additional information
-            from hybrid_search import search_with_debug_info
-            result = search_with_debug_info(search_query.query)
-            return result
-        else:
-            # Standard search
-            result = execure_hybrid_chain(search_query.query)
-            return {"result": result}
+            result["debug_info"] = {
+                "document_debug": document_result.get("debug") if isinstance(document_result, dict) else None,
+                "excel_files_found": excel_csv_files if 'excel_csv_files' in locals() else []
+            }
+        
+        logger.info(f"Comprehensive search completed. Document results: {document_result is not None}, Excel results: {len(excel_results)}")
+        return result
+        
     except Exception as e:
-        logger.error(f"Error during hybrid search: {str(e)}")
+        logger.error(f"Error during comprehensive search: {str(e)}")
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"error": f"Failed to perform hybrid search: {str(e)}"}
+            content={"error": f"Failed to perform comprehensive search: {str(e)}"}
         )
+
+
+@app.post("/querypandas/")
+async def query_pandas_agent(search_query: SearchQuery):
+    """
+    Query Excel/CSV files directly using pandas agent for DataFrame operations.
+    This endpoint provides direct access to pandas-based data analysis capabilities.
+    """
+    try:
+        logger.info(f"Performing pandas agent query: {search_query.query}")
+        
+        # Get all uploaded Excel/CSV files
+        uploaded_files = file_manager.list_files(UPLOADED_FILE_PATH)
+        excel_csv_files = [f for f in uploaded_files if is_excel_or_csv_file(f)]
+        
+        if not excel_csv_files:
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content={"error": "No Excel or CSV files found. Please upload Excel/CSV files first."}
+            )
+        
+        logger.info(f"Found {len(excel_csv_files)} Excel/CSV files for pandas queries: {excel_csv_files}")
+        
+        # Query each Excel/CSV file with pandas agent
+        results = []
+        errors = []
+        
+        for filename in excel_csv_files:
+            try:
+                file_path = file_manager.get_file_path(UPLOADED_FILE_PATH, filename)
+                with create_excel_agent(file_path) as agent:
+                    answer = agent.query(search_query.query)
+                    data_summary = agent.get_data_summary()
+                    
+                    results.append({
+                        "filename": filename,
+                        "file_type": get_file_type(filename),
+                        "answer": answer,
+                        "data_summary": data_summary if search_query.debug else {
+                            "total_rows": data_summary.get("total_rows"),
+                            "total_columns": data_summary.get("total_columns"),
+                            "columns": data_summary.get("columns")
+                        }
+                    })
+                    logger.info(f"Successfully queried pandas agent for: {filename}")
+                    
+            except Exception as e:
+                error_msg = f"Error querying {filename}: {str(e)}"
+                errors.append(error_msg)
+                logger.warning(error_msg)
+        
+        # Compile results
+        response = {
+            "query": search_query.query,
+            "files_queried": len(excel_csv_files),
+            "successful_queries": len(results),
+            "results": results,
+            "errors": errors,
+            "summary": {
+                "query_successful": len(results) > 0,
+                "files_with_results": len(results),
+                "files_with_errors": len(errors)
+            }
+        }
+        
+        if search_query.debug:
+            response["debug_info"] = {
+                "available_files": excel_csv_files,
+                "query_method": "pandas_agent_direct"
+            }
+        
+        logger.info(f"Pandas query completed. Successful: {len(results)}, Errors: {len(errors)}")
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error during pandas query: {str(e)}")
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": f"Failed to perform pandas query: {str(e)}"}
+        )
+
+
 
 @app.get("/generatequestions/{filename}")
 async def generate_questions_for_file(
@@ -524,15 +766,31 @@ async def generate_questions_for_file(
             raise FileNotFoundError(f"No file found for {base_filename} in parsed_files")
         
         logger.info(f"Generating fresh {number_of_questions} questions for {base_filename}")
-        questions = generate_questions(text_content, number_of_questions)
-        
+        questions_raw = generate_questions(text_content, number_of_questions)
+
+        # Try to parse as JSON array first
+        questions = []
+        try:
+            questions = json.loads(questions_raw)
+            if not isinstance(questions, list):
+                questions = []
+        except Exception:
+            # Fallback: parse as numbered lines
+            import re
+            for line in questions_raw.splitlines():
+                match = re.match(r"^\s*\d+\.\s*(.+)$", line)
+                if match:
+                    questions.append(match.group(1).strip())
+            # Fallback: if parsing fails, return the raw string as a single-item list
+            if not questions and questions_raw.strip():
+                questions = [questions_raw.strip()]
+
         metadata = {
             "file_name": base_filename,
             "source": "parsed_file",
             "number_of_questions": number_of_questions,
             "generated_fresh": True
         }
-            
         logger.info(f"Questions generated successfully for {base_filename}")
         return {"questions": questions, "metadata": metadata}
         
@@ -549,6 +807,103 @@ async def generate_questions_for_file(
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"error": f"Failed to generate questions for file: {str(e)}"}
+        )
+
+
+@app.get("/generatefaq/{filename}")
+async def generate_faq_for_file(
+    filename: str = Path(..., description="Name of the file to generate FAQ for"),
+    number_of_faqs: int = Query(5, description="Number of FAQ items to generate", ge=1, le=20)
+):
+    """
+    Generate FAQ (Frequently Asked Questions) from a file in the parsed_files directory.
+    FAQ items are generated fresh each time without saving to disk.
+    
+    Args:
+        filename: Name of the file to generate FAQ for (can be with or without extension)
+        number_of_faqs: Number of FAQ items to generate (default: 5, max: 20)
+        
+    Returns:
+        Generated FAQ items and metadata
+    """
+    logger.info(f"Generating FAQ for file: {filename}")
+    
+    try:
+        # Extract base filename without extension to ensure consistency
+        # This handles both "Sample1.pdf" and "Sample1" as input
+        base_filename = FilePath(filename).stem
+        logger.info(f"Using base filename: {base_filename}")
+        
+        # Load content from parsed file
+        if file_manager.file_exists(PARSED_FILE_PATH, f"{base_filename}.md"):
+            logger.info(f"Loading parsed file for FAQ generation: {base_filename}.md")
+            text_content = file_manager.load_file(PARSED_FILE_PATH, f"{base_filename}.md")
+        else:
+            raise FileNotFoundError(f"No file found for {base_filename} in parsed_files")
+        
+        logger.info(f"Generating fresh {number_of_faqs} FAQ items for {base_filename}")
+        faq_content = generate_faq(text_content, number_of_faqs)
+        
+        # Parse the FAQ content into structured format
+        import re
+        faq_items = []
+        
+        # Split by question markers and process each FAQ item
+        parts = re.split(r'\*\*Q\d+:', faq_content)
+        for i, part in enumerate(parts[1:], 1):  # Skip the first empty part
+            if part.strip():
+                # Extract question and answer
+                lines = part.strip().split('\n')
+                if lines:
+                    question = lines[0].replace('**', '').strip()
+                    # Find the answer part (starts with A{number}:)
+                    answer_start = None
+                    for j, line in enumerate(lines[1:], 1):
+                        if re.match(r'^A\d+:', line):
+                            answer_start = j
+                            break
+                    
+                    if answer_start is not None:
+                        answer = lines[answer_start].replace(f'A{i}:', '').strip()
+                        # Join any additional answer lines
+                        for k in range(answer_start + 1, len(lines)):
+                            if not re.match(r'^\*\*Q\d+:', lines[k]):
+                                answer += ' ' + lines[k].strip()
+                            else:
+                                break
+                        
+                        faq_items.append({
+                            "question": question,
+                            "answer": answer
+                        })
+        
+        # Fallback: if parsing fails, return the raw content
+        if not faq_items and faq_content.strip():
+            faq_items = [{"question": "Generated FAQ", "answer": faq_content.strip()}]
+        
+        metadata = {
+            "file_name": base_filename,
+            "source": "parsed_file",
+            "number_of_faqs": number_of_faqs,
+            "generated_fresh": True
+        }
+            
+        logger.info(f"FAQ generated successfully for {base_filename}")
+        return {"faq_items": faq_items, "metadata": metadata}
+        
+    except FileNotFoundError as e:
+        logger.error(f"File not found for FAQ generation: {e}")
+        # Use base_filename if it was extracted, otherwise use original filename
+        display_filename = FilePath(filename).stem if filename else filename
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"error": f"File {display_filename} not found in parsed_files directory"}
+        )
+    except Exception as e:
+        logger.error(f"Error during FAQ generation for {filename}: {str(e)}")
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"error": f"Failed to generate FAQ for file: {str(e)}"}
         )
 
 # Error handlers

@@ -137,6 +137,53 @@ def create_hybrid_retriever():
         logger.error(f"Error creating retriever: {e}")
         raise
 
+
+def get_filtered_documents(query, source_document):
+    """
+    Get documents filtered by source document using direct index query.
+    
+    Args:
+        query: The search query
+        source_document: The source document name to filter by
+    """
+    try:
+        logger.info(f"Getting filtered documents for source: {source_document}")
+        index = create_index()
+        
+        # Create query embedding
+        query_embedding = embeddings.embed_query(query)
+        
+        # Query Pinecone with source filter
+        query_response = index.query(
+            vector=query_embedding,
+            top_k=10,
+            include_metadata=True,
+            namespace="biz-to-bricks-namespace",
+            filter={"source": source_document}
+        )
+        
+        # Convert to LangChain Document objects
+        from langchain_core.documents import Document
+        docs = []
+        
+        for match in query_response.get('matches', []):
+            metadata = match.get('metadata', {})
+            # Get text content from metadata.text field
+            text_content = metadata.get('text', '')
+            
+            doc = Document(
+                page_content=text_content,
+                metadata=metadata
+            )
+            docs.append(doc)
+        
+        logger.info(f"Retrieved {len(docs)} filtered documents for source: {source_document}")
+        return docs
+        
+    except Exception as e:
+        logger.error(f"Error getting filtered documents for {source_document}: {e}")
+        raise
+
 # Create the retriever (only once)
 logger.info("Initializing hybrid search retriever...")
 retriever = create_hybrid_retriever()
@@ -187,14 +234,22 @@ hybrid_chain = (
     | StrOutputParser()
 )
 
-def execure_hybrid_chain(query):
+def execure_hybrid_chain(query, source_document=None):
     """Execute the hybrid chain with enhanced logging and debugging."""
-    logger.info(f"Executing hybrid search for query: {query}")
+    filter_info = f" (filtered by: {source_document})" if source_document else ""
+    logger.info(f"Executing hybrid search for query: {query}{filter_info}")
     try:
         # Log the retrieval process for debugging
         logger.info("Retrieving relevant documents...")
-        docs = retriever.invoke(query)
-        logger.info(f"Retrieved {len(docs)} documents")
+        
+        if source_document:
+            # Get filtered documents for specific source
+            docs = get_filtered_documents(query, source_document)
+        else:
+            # Use the global retriever for all documents
+            docs = retriever.invoke(query)
+            
+        logger.info(f"Retrieved {len(docs)} documents{filter_info}")
         
         # Log the documents for debugging (first 100 chars of each)
         for i, doc in enumerate(docs):
@@ -203,24 +258,40 @@ def execure_hybrid_chain(query):
             if hasattr(doc, 'metadata') and doc.metadata:
                 logger.info(f"Doc {i+1} metadata: {doc.metadata}")
         
-        # Execute the chain
-        result = hybrid_chain.invoke(query)
+        # Create context from documents and generate response
+        context = format_docs(docs)
+        
+        # Create the prompt with context and question
+        formatted_prompt = prompt.format(context=context, question=query)
+        
+        # Generate response using LLM
+        result = llm.invoke(formatted_prompt)
+        
+        # Extract content if it's wrapped in AIMessage
+        if hasattr(result, 'content'):
+            result = result.content
+            
         logger.info("Hybrid search completed successfully")
         return result
     except Exception as e:
         logger.error(f"Error executing hybrid search: {e}")
         raise
 
-def search_with_debug_info(query):
+def search_with_debug_info(query, source_document=None):
     """Execute search and return both result and debug information."""
-    logger.info(f"Executing debug search for query: {query}")
+    filter_info = f" (filtered by: {source_document})" if source_document else ""
+    logger.info(f"Executing debug search for query: {query}{filter_info}")
     try:
         # Get documents for debugging
-        docs = retriever.invoke(query)
+        if source_document:
+            docs = get_filtered_documents(query, source_document)
+        else:
+            docs = retriever.invoke(query)
         
         # Format debug info
         debug_info = {
             "query": query,
+            "source_filter": source_document,
             "documents_found": len(docs),
             "documents": []
         }
@@ -233,8 +304,14 @@ def search_with_debug_info(query):
             }
             debug_info["documents"].append(doc_info)
         
-        # Execute the chain
-        result = hybrid_chain.invoke(query)
+        # Create context and generate response
+        context = format_docs(docs)
+        formatted_prompt = prompt.format(context=context, question=query)
+        result = llm.invoke(formatted_prompt)
+        
+        # Extract content if it's wrapped in AIMessage
+        if hasattr(result, 'content'):
+            result = result.content
         
         return {
             "result": result,

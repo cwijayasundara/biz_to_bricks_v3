@@ -4,6 +4,7 @@ import os
 from pinecone import ServerlessSpec
 import time
 from langchain_openai import OpenAIEmbeddings
+from typing import List
 
 load_dotenv()
 
@@ -148,3 +149,51 @@ def delete_document_from_pinecone(file_name: str) -> bool:
     except Exception as e:
         print(f"Error deleting document {file_name} from Pinecone: {e}")
         return False
+
+
+def get_available_source_documents() -> List[str]:
+    """
+    Get a list of all available source documents in the Pinecone index.
+    
+    Returns:
+        List[str]: List of unique source document names
+    """
+    print("Getting available source documents from Pinecone")
+    try:
+        index = create_index()
+        namespace = "biz-to-bricks-namespace"
+        
+        # Check if the namespace exists
+        stats = index.describe_index_stats()
+        if namespace not in stats.get('namespaces', {}):
+            print(f"Namespace '{namespace}' not found in index")
+            return []
+        
+        # Query to get all vectors with metadata (we'll extract unique sources)
+        # Since we can't directly query for all unique metadata values,
+        # we'll use a broad search to get many documents and extract unique sources
+        query_embedding = embeddings.embed_query("document")
+        
+        # Get a large number of results to capture all documents
+        query_response = index.query(
+            vector=query_embedding,
+            top_k=10000,  # Large number to get all documents
+            include_metadata=True,
+            namespace=namespace
+        )
+        
+        # Extract unique source documents
+        sources = set()
+        for match in query_response.get('matches', []):
+            metadata = match.get('metadata', {})
+            source = metadata.get('source')
+            if source:
+                sources.add(source)
+        
+        source_list = sorted(list(sources))
+        print(f"Found {len(source_list)} unique source documents: {source_list}")
+        return source_list
+        
+    except Exception as e:
+        print(f"Error getting source documents: {e}")
+        return []

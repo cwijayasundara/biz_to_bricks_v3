@@ -19,8 +19,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy all application code
 COPY . ./
 
-# Create directories for file storage (removed edited_files as it's no longer used)
-RUN mkdir -p uploaded_files parsed_files summarized_files bm25_indexes generated_questions
+# Create directories for file storage
+RUN mkdir -p uploaded_files parsed_files bm25_indexes generated_questions
 
 # Expose the port the app runs on
 EXPOSE 8004

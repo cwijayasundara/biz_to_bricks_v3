@@ -25,7 +25,6 @@ logger = logging.getLogger(__name__)
 # Directory constants
 UPLOADED_FILES_DIR = "uploaded_files"
 PARSED_FILES_DIR = "parsed_files"
-SUMMARIZED_FILES_DIR = "summarized_files"
 BM25_INDEXES_DIR = "bm25_indexes"
 GENERATED_QUESTIONS_DIR = "generated_questions"
 
@@ -109,7 +108,6 @@ class FileManager:
         directories = [
             UPLOADED_FILES_DIR,
             PARSED_FILES_DIR,
-            SUMMARIZED_FILES_DIR,
             BM25_INDEXES_DIR,
             GENERATED_QUESTIONS_DIR
         ]

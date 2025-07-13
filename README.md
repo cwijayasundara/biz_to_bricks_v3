@@ -19,10 +19,11 @@ A comprehensive document processing and querying system with FastAPI backend and
 ```
 biz_to_bricks_v3/
 ├── server/                     # FastAPI Backend
-│   ├── app.py                 # Main API application (9 endpoints)
+│   ├── app.py                 # Main API application (10 endpoints)
 │   ├── file_parser.py         # Document parsing with LlamaParse
 │   ├── doc_summarizer.py      # AI text summarization
 │   ├── question_gen.py        # AI question generation
+│   ├── faq_gen.py             # AI FAQ generation
 │   ├── hybrid_search.py       # Vector + BM25 search
 │   ├── ingest_docs.py         # Document ingestion with upsert
 │   ├── pinecone_util.py       # Pinecone vector operations
@@ -148,8 +149,7 @@ server/
 ├── uploaded_files/       # Original uploaded documents
 ├── parsed_files/         # Markdown versions (editable)
 ├── generated_questions/  # AI-generated questions
-├── bm25_indexes/        # Search index files
-└── summarized_files/    # Summary cache (deprecated)
+└── bm25_indexes/        # Search index files
 ```
 
 ### 💡 Smart Storage System

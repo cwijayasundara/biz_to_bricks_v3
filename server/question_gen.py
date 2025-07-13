@@ -17,13 +17,7 @@ You are given a text and you need to generate {number_of_questions} questions ba
 
 Read the text carefully and generate questions that are relevant and contextually correct to the text.
 
-The questions should be in the following format:
-
-1. Question 1
-2. Question 2
-3. Question 3
-
-return a list of questions in a json format.
+Return ONLY a JSON array of questions, e.g. [\"Question 1\", \"Question 2\", ...]. Do not include any other text, explanation, or formatting.
 
 {text}
 

@@ -15,6 +15,7 @@ langchain-community==0.3.23
 langchain-openai==0.3.16
 langchain-pinecone==0.2.5
 langchain-text-splitters
+langchain-experimental
 
 # LlamaIndex and parsing
 llama-parse==0.6.21
@@ -39,6 +40,12 @@ requests>=2.31.0
 trustcall
 lark
 jq
+
+# Data processing (for Excel agent)
+pandas>=1.5.0
+openpyxl>=3.0.0
+xlrd>=2.0.0
+tabulate>=0.9.0
 
 # Testing (optional for production)
 pytest
