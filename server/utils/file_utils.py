@@ -7,7 +7,6 @@ from typing import Optional
 from config import (
     UPLOADED_FILE_PATH, 
     PARSED_FILE_PATH, 
-    GENERATED_QUESTIONS_PATH,
     EXCEL_EXTENSIONS,
     CSV_EXTENSIONS
 )
@@ -74,5 +73,5 @@ def get_file_type(filename: str) -> str:
 
 def ensure_directories_exist():
     """Ensure all required directories exist."""
-    for directory in [UPLOADED_FILE_PATH, PARSED_FILE_PATH, GENERATED_QUESTIONS_PATH]:
+    for directory in [UPLOADED_FILE_PATH, PARSED_FILE_PATH]:
         create_directory(directory) 

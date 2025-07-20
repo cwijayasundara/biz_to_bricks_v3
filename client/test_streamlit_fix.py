@@ -24,7 +24,6 @@ class Colors:
 
 app_url_local = "http://localhost:8004"
 
-
 def print_header(text: str):
     """Print a formatted header."""
     print(f"\n{Colors.HEADER}{'='*80}")

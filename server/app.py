@@ -28,7 +28,6 @@ from fastapi.responses import JSONResponse
 from config import (
     UPLOADED_FILE_PATH, 
     PARSED_FILE_PATH, 
-    GENERATED_QUESTIONS_PATH,
     API_TITLE,
     API_VERSION,
     API_CONTACT,
@@ -227,7 +226,7 @@ async def upload_file(file: UploadFile = File(..., description="File to upload -
     response_model=FilesListResponse,
     tags=["File Management"],
     summary="List files in a directory",
-    description="List all files in the specified directory (uploaded_files, parsed_files, or generated_questions)."
+    description="List all files in the specified directory (uploaded_files, parsed_files, or bm25_indexes)."
 )
 async def list_files(directory: str = Path(..., description="Directory name to list files from")):
     """List all files in the specified directory on the server."""
@@ -253,7 +252,7 @@ async def delete_file(
     logger.info(f"Deleting file: {directory}/{filename}")
     
     # Validate directory
-    valid_directories = ["uploaded_files", "parsed_files", "bm25_indexes", "generated_questions"]
+    valid_directories = ["uploaded_files", "parsed_files", "bm25_indexes"]
     if directory not in valid_directories:
         logger.error(f"Invalid directory: {directory}")
         raise HTTPException(
@@ -493,9 +492,9 @@ async def hybrid_search(search_query: SearchQuery):
         # Execute document search
         document_result, document_error = execute_document_search(search_query.query, search_query.source_document, search_query.debug)
         
-        # For sequential search, determine if we should search Excel/CSV files
-        if not search_query.source_document:
-            # Check if document results are meaningful
+        # Determine search behavior based on strategy
+        if search_strategy_info["strategy"] == "sequential":
+            # Sequential search: check if document results are meaningful, fallback to pandas if not
             has_meaningful_document_results, reason = is_meaningful_document_result(document_result)
             
             if not has_meaningful_document_results:
@@ -506,7 +505,7 @@ async def hybrid_search(search_query: SearchQuery):
             else:
                 logger.info(f"⏭️  SKIPPING PANDAS AGENT SEARCH - Document search found meaningful results: {reason}")
         else:
-            # For targeted search, also check if we should search Excel/CSV files as fallback
+            # Targeted search: also check if we should search Excel/CSV files as fallback
             has_meaningful_document_results, reason = is_meaningful_document_result(document_result)
             
             if not has_meaningful_document_results and target_excel_csv_files:
@@ -523,10 +522,8 @@ async def hybrid_search(search_query: SearchQuery):
             excel_results, excel_errors = execute_excel_csv_search(search_query.query, target_excel_csv_files)
         
         # Build response based on search strategy
-        if not search_query.source_document:
+        if search_strategy_info["strategy"] == "sequential":
             # Sequential search strategy response - use same meaningful results logic
-            has_hybrid_results, result_reason = is_meaningful_document_result(document_result)
-            
             response = build_sequential_response(search_query.query, search_query.source_document, document_result, 
                                                 document_error, excel_results, excel_errors, 
                                                 target_excel_csv_files, search_query.debug)
@@ -536,7 +533,7 @@ async def hybrid_search(search_query: SearchQuery):
                                               document_error, excel_results, excel_errors, 
                                               search_documents, search_excel_csv, search_query.debug)
         
-        search_type = "Sequential smart" if not search_query.source_document else "Targeted"
+        search_type = "Sequential smart" if search_strategy_info["strategy"] == "sequential" else "Targeted"
         logger.info(f"{search_type} search completed. Document results: {document_result is not None}, Excel results: {len(excel_results)}")
         return response
         
@@ -906,18 +903,33 @@ async def general_exception_handler(request, exc):
 
 # Add these helper functions before the hybrid_search function
 
+def format_source_filter_display(source_document: str) -> str:
+    """
+    Format the source document filter for display in responses.
+    
+    Args:
+        source_document: The source document filter value
+        
+    Returns:
+        Formatted display string
+    """
+    if not source_document or source_document.lower() in ["all", "none", ""]:
+        return "all documents"
+    return source_document
+
+
 def determine_search_strategy(source_document: str, uploaded_files: list) -> dict:
     """
     Determine the search strategy based on source document and available files.
     
     Args:
-        source_document: Optional source document to filter by
+        source_document: Optional source document to filter by (use "all" to search all documents)
         uploaded_files: List of uploaded files
         
     Returns:
         Dictionary with search strategy information
     """
-    if source_document:
+    if source_document and source_document.lower() not in ["all", "none", ""]:
         # Check if source document is Excel/CSV
         is_excel_csv = is_excel_or_csv_file(source_document)
         
@@ -938,14 +950,14 @@ def determine_search_strategy(source_document: str, uploaded_files: list) -> dic
                 "description": f"Targeting document file: {source_document}"
             }
     else:
-        # No source specified - sequential search strategy
+        # No source specified or "all" specified - sequential search strategy
         target_excel_csv_files = [f for f in uploaded_files if is_excel_or_csv_file(f)]
         return {
             "search_documents": True,
             "search_excel_csv": False,  # Will be determined later based on document results
             "target_excel_csv_files": target_excel_csv_files,
             "strategy": "sequential",
-            "description": "Sequential search strategy"
+            "description": "Sequential search strategy (all documents)"
         }
 
 def execute_document_search(query: str, source_document: str, debug: bool) -> tuple:
@@ -954,7 +966,7 @@ def execute_document_search(query: str, source_document: str, debug: bool) -> tu
     
     Args:
         query: Search query
-        source_document: Optional source document filter
+        source_document: Optional source document filter (use "all" to search all documents)
         debug: Whether to include debug information
         
     Returns:
@@ -963,11 +975,14 @@ def execute_document_search(query: str, source_document: str, debug: bool) -> tu
     try:
         logger.info(f"🔍 EXECUTING DOCUMENT SEARCH for query: {query}")
         
+        # Convert "all" to None for the hybrid search function
+        search_filter = None if (source_document and source_document.lower() in ["all", "none", ""]) else source_document
+        
         if debug:
             from hybrid_search import search_with_debug_info
-            result = search_with_debug_info(query, source_document)
+            result = search_with_debug_info(query, search_filter)
         else:
-            result = execure_hybrid_chain(query, source_document)
+            result = execure_hybrid_chain(query, search_filter)
             
         logger.info("✅ DOCUMENT SEARCH COMPLETED")
         return result, None
@@ -1074,7 +1089,7 @@ def build_sequential_response(query: str, source_document: str, document_result:
     if has_hybrid_results:
         return {
             "query": query,
-            "source_filter": source_document,
+            "source_filter": format_source_filter_display(source_document),
             "best_result": {
                 "answer": document_result,
                 "source": "document_search",
@@ -1137,7 +1152,7 @@ def build_sequential_response(query: str, source_document: str, document_result:
             
             response = {
                 "query": query,
-                "source_filter": source_document,
+                "source_filter": format_source_filter_display(source_document),
                 "best_result": {
                     "answer": combined_pandas,
                     "source": "pandas_agent",
@@ -1187,7 +1202,7 @@ def build_sequential_response(query: str, source_document: str, document_result:
             logger.info(f"📊 BOTH SEARCHES FAILED - Document search and pandas agent found no meaningful results")
             return {
                 "query": query,
-                "source_filter": source_document,
+                "source_filter": format_source_filter_display(source_document),
                 "best_result": {
                     "answer": "No results found for your query. Please try rephrasing your question or check if relevant documents have been uploaded and processed.",
                     "source": "none",
@@ -1223,7 +1238,7 @@ def build_sequential_response(query: str, source_document: str, document_result:
     else:
         return {
             "query": query,
-            "source_filter": source_document,
+            "source_filter": format_source_filter_display(source_document),
             "best_result": {
                 "answer": "No results found for your query. Please try rephrasing your question or check if relevant documents have been uploaded and processed.",
                 "source": "none",
@@ -1277,7 +1292,7 @@ def build_targeted_response(query: str, source_document: str, document_result: s
     Returns:
         Response dictionary
     """
-    filter_description = f" (filtered by: {source_document})"
+    filter_description = f" (filtered by: {format_source_filter_display(source_document)})"
     
     # Determine the best result
     best_result = None
@@ -1327,7 +1342,7 @@ def build_targeted_response(query: str, source_document: str, document_result: s
     
     response = {
         "query": query,
-        "source_filter": source_document,
+        "source_filter": format_source_filter_display(source_document),
         "best_result": best_result,
         "document_search": {
             "description": f"Search results from Pinecone/BM25 (includes parsed content from document files){filter_description}",

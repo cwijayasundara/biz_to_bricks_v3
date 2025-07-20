@@ -37,19 +37,27 @@ class SearchQuery(BaseModel):
     )
     source_document: Optional[str] = Field(
         None, 
-        description="Optional filename to search within specific document (omit for all documents)",
-        examples=["sales_data.xlsx"]
+        description="Optional filename to search within specific document. Use 'all' or omit for sequential search across all documents.",
+        examples=["sales_data.xlsx", "all"]
     )
     
     model_config = ConfigDict(
         json_schema_extra={
             "examples": [
                 {
-                    "description": "General search across all documents",
+                    "description": "Sequential search across all documents (method 1)",
                     "value": {
                         "query": "What are the main conclusions about market trends?",
                         "debug": False,
                         "source_document": None
+                    }
+                },
+                {
+                    "description": "Sequential search across all documents (method 2)",
+                    "value": {
+                        "query": "Who prepared the document with lot number 01225?",
+                        "debug": False,
+                        "source_document": "all"
                     }
                 },
                 {

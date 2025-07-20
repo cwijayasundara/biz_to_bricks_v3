@@ -8,7 +8,6 @@ import os
 # Directory constants
 UPLOADED_FILE_PATH = "uploaded_files"
 PARSED_FILE_PATH = "parsed_files"
-GENERATED_QUESTIONS_PATH = "generated_questions"
 BM25_INDEXES_PATH = "bm25_indexes"
 
 # Pinecone Configuration - Generic and configurable

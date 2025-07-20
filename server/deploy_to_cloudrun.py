@@ -39,7 +39,8 @@ class CloudRunDeployer:
         self.image_name = "document-processing-server"
         self.image_tag = f"{region}-docker.pkg.dev/{project_id}/{repository_name}/{self.image_name}:latest"
         
-    def run_command(self, command: list, check: bool = True, capture_output: bool = True) -> subprocess.CompletedProcess:
+    def run_command(self, command: list, check: bool = True, capture_output: bool = True, 
+                   timeout: int = 300) -> subprocess.CompletedProcess:
         """Run a shell command and handle errors."""
         print(f"Running: {' '.join(command)}")
         try:
@@ -47,7 +48,8 @@ class CloudRunDeployer:
                 command, 
                 check=check, 
                 capture_output=capture_output, 
-                text=True
+                text=True,
+                timeout=timeout
             )
             if result.stdout and capture_output:
                 print(f"Output: {result.stdout.strip()}")
@@ -59,6 +61,11 @@ class CloudRunDeployer:
             if check:
                 sys.exit(1)
             return e
+        except subprocess.TimeoutExpired:
+            print(f"Command timed out after {timeout} seconds")
+            if check:
+                sys.exit(1)
+            return None
     
     def check_prerequisites(self):
         """Check if all prerequisites are met."""
@@ -66,35 +73,45 @@ class CloudRunDeployer:
         
         # Check if gcloud is installed
         try:
-            result = self.run_command(["gcloud", "version"])
-            print("✅ gcloud CLI is installed")
+            result = self.run_command(["gcloud", "version"], check=False)
+            if result.returncode == 0:
+                print("✅ gcloud CLI is installed")
+            else:
+                print("❌ gcloud CLI is not installed. Please install it first.")
+                sys.exit(1)
         except FileNotFoundError:
             print("❌ gcloud CLI is not installed. Please install it first.")
             sys.exit(1)
         
         # Check if Docker is installed
         try:
-            self.run_command(["docker", "--version"])
-            print("✅ Docker is installed")
+            result = self.run_command(["docker", "--version"], check=False)
+            if result.returncode == 0:
+                print("✅ Docker is installed")
+            else:
+                print("❌ Docker is not installed. Please install it first.")
+                sys.exit(1)
         except FileNotFoundError:
             print("❌ Docker is not installed. Please install it first.")
             sys.exit(1)
         
         # Check if authenticated
         try:
-            result = self.run_command(["gcloud", "auth", "list", "--filter=status:ACTIVE"])
-            if "ACTIVE" not in result.stdout:
+            result = self.run_command(["gcloud", "auth", "list", "--filter=status:ACTIVE"], check=False)
+            if result.returncode == 0 and "ACTIVE" in result.stdout:
+                print("✅ gcloud authentication verified")
+            else:
                 print("❌ Not authenticated with gcloud. Please run 'gcloud auth login'")
                 sys.exit(1)
-            print("✅ gcloud authentication verified")
-        except Exception:
-            print("❌ Error checking gcloud authentication")
+        except Exception as e:
+            print(f"❌ Error checking gcloud authentication: {e}")
             sys.exit(1)
         
         # Check if .env file exists
         env_file = Path(".env")
         if not env_file.exists():
             print("❌ .env file not found. Please create it with your API keys.")
+            print("Required keys: OPENAI_API_KEY, LLAMA_CLOUD_API_KEY, PINECONE_API_KEY, PINECONE_ENVIRONMENT")
             sys.exit(1)
         print("✅ .env file found")
         
@@ -121,8 +138,12 @@ class CloudRunDeployer:
     def set_project(self):
         """Set the GCP project."""
         print(f"🔧 Setting GCP project to {self.project_id}...")
-        self.run_command(["gcloud", "config", "set", "project", self.project_id])
-        print("✅ Project set successfully")
+        result = self.run_command(["gcloud", "config", "set", "project", self.project_id], check=False)
+        if result.returncode == 0:
+            print("✅ Project set successfully")
+        else:
+            print(f"❌ Failed to set project: {result.stderr}")
+            sys.exit(1)
     
     def enable_apis(self):
         """Enable required Google Cloud APIs."""
@@ -131,25 +152,34 @@ class CloudRunDeployer:
             "artifactregistry.googleapis.com",
             "run.googleapis.com",
             "cloudbuild.googleapis.com",
-            "storage.googleapis.com"
+            "storage.googleapis.com",
+            "secretmanager.googleapis.com"
         ]
         
         for api in apis:
             print(f"Enabling {api}...")
-            self.run_command(["gcloud", "services", "enable", api])
+            result = self.run_command(["gcloud", "services", "enable", api], check=False)
+            if result.returncode == 0:
+                print(f"✅ {api} enabled")
+            else:
+                print(f"⚠️ Could not enable {api}: {result.stderr}")
         
         print("✅ All APIs enabled successfully")
         print("⏳ Waiting for APIs to propagate...")
-        time.sleep(10)  # Give APIs time to propagate
+        time.sleep(15)  # Give APIs time to propagate
     
     def configure_docker_auth(self):
         """Configure Docker authentication for Artifact Registry."""
         print("🔧 Configuring Docker authentication...")
-        self.run_command([
+        result = self.run_command([
             "gcloud", "auth", "configure-docker", 
             f"{self.region}-docker.pkg.dev", "--quiet"
-        ])
-        print("✅ Docker authentication configured")
+        ], check=False)
+        
+        if result.returncode == 0:
+            print("✅ Docker authentication configured")
+        else:
+            print(f"⚠️ Docker auth configuration warning: {result.stderr}")
     
     def create_artifact_registry(self):
         """Create Artifact Registry repository if it doesn't exist."""
@@ -160,20 +190,27 @@ class CloudRunDeployer:
             result = self.run_command([
                 "gcloud", "artifacts", "repositories", "describe", 
                 self.repository_name, "--location", self.region
-            ])
-            print("✅ Artifact Registry repository already exists")
-            return
-        except subprocess.CalledProcessError:
-            # Repository doesn't exist, create it
+            ], check=False)
+            
+            if result.returncode == 0:
+                print("✅ Artifact Registry repository already exists")
+                return
+        except Exception:
             pass
         
-        self.run_command([
+        # Repository doesn't exist, create it
+        result = self.run_command([
             "gcloud", "artifacts", "repositories", "create", self.repository_name,
             "--repository-format=docker",
             f"--location={self.region}",
             "--description=Docker repository for document processing service"
-        ])
-        print("✅ Artifact Registry repository created successfully")
+        ], check=False)
+        
+        if result.returncode == 0:
+            print("✅ Artifact Registry repository created successfully")
+        else:
+            print(f"❌ Failed to create repository: {result.stderr}")
+            sys.exit(1)
     
     def create_storage_buckets(self):
         """Create Cloud Storage buckets for persistent file storage."""
@@ -183,8 +220,7 @@ class CloudRunDeployer:
             f"{self.project_id}-uploaded-files",
             f"{self.project_id}-parsed-files",
             f"{self.project_id}-summarized-files",
-            f"{self.project_id}-bm25-indexes",
-            f"{self.project_id}-generated-questions"
+            f"{self.project_id}-bm25-indexes"
         ]
         
         for bucket_name in bucket_names:
@@ -198,11 +234,15 @@ class CloudRunDeployer:
                     print(f"✅ Bucket {bucket_name} already exists")
                 else:
                     # Create bucket
-                    self.run_command([
+                    result = self.run_command([
                         "gsutil", "mb", "-l", self.region, f"gs://{bucket_name}"
-                    ])
-                    print(f"✅ Bucket {bucket_name} created successfully")
+                    ], check=False)
                     
+                    if result.returncode == 0:
+                        print(f"✅ Bucket {bucket_name} created successfully")
+                    else:
+                        print(f"⚠️ Could not create bucket {bucket_name}: {result.stderr}")
+                        
             except Exception as e:
                 print(f"⚠️ Could not create bucket {bucket_name}: {e}")
     
@@ -210,18 +250,33 @@ class CloudRunDeployer:
         """Build and push Docker image to Artifact Registry."""
         print("🔧 Building Docker image...")
         
+        # Check if Dockerfile exists
+        if not Path("Dockerfile").exists():
+            print("❌ Dockerfile not found in current directory")
+            sys.exit(1)
+        
         # Build image for linux/amd64 platform
-        self.run_command([
+        result = self.run_command([
             "docker", "build", 
             "--platform", "linux/amd64",
             "-t", self.image_tag,
             "."
-        ])
-        print("✅ Docker image built successfully")
+        ], check=False, timeout=600)  # 10 minute timeout for build
+        
+        if result.returncode == 0:
+            print("✅ Docker image built successfully")
+        else:
+            print(f"❌ Docker build failed: {result.stderr}")
+            sys.exit(1)
         
         print("🔧 Pushing image to Artifact Registry...")
-        self.run_command(["docker", "push", self.image_tag])
-        print("✅ Image pushed successfully")
+        result = self.run_command(["docker", "push", self.image_tag], check=False, timeout=300)
+        
+        if result.returncode == 0:
+            print("✅ Image pushed successfully")
+        else:
+            print(f"❌ Docker push failed: {result.stderr}")
+            sys.exit(1)
     
     def deploy_to_cloudrun(self, env_vars: dict, use_secrets: bool = False):
         """Deploy the service to Cloud Run."""
@@ -235,7 +290,9 @@ class CloudRunDeployer:
             "--allow-unauthenticated",
             "--port", "8004",
             "--memory", "2Gi",
-            "--cpu", "1"
+            "--cpu", "1",
+            "--timeout", "300",
+            "--max-instances", "10"
         ]
         
         # Add project ID environment variable for Cloud Storage
@@ -255,8 +312,13 @@ class CloudRunDeployer:
             env_string = ",".join([f"{k}={v}" for k, v in env_vars.items()])
             deploy_cmd.extend(["--set-env-vars", env_string])
         
-        self.run_command(deploy_cmd)
-        print("✅ Service deployed successfully")
+        result = self.run_command(deploy_cmd, check=False, timeout=600)  # 10 minute timeout for deployment
+        
+        if result.returncode == 0:
+            print("✅ Service deployed successfully")
+        else:
+            print(f"❌ Deployment failed: {result.stderr}")
+            sys.exit(1)
     
     def get_service_url(self) -> str:
         """Get the deployed service URL."""
@@ -265,14 +327,22 @@ class CloudRunDeployer:
             "gcloud", "run", "services", "describe", self.service_name,
             "--region", self.region,
             "--format=value(status.url)"
-        ])
+        ], check=False)
         
-        url = result.stdout.strip()
-        print(f"🌐 Service URL: {url}")
-        return url
+        if result.returncode == 0:
+            url = result.stdout.strip()
+            print(f"🌐 Service URL: {url}")
+            return url
+        else:
+            print(f"❌ Failed to get service URL: {result.stderr}")
+            return ""
     
     def test_deployment(self, service_url: str):
         """Test the deployed service."""
+        if not service_url:
+            print("⚠️ Cannot test deployment - no service URL")
+            return
+            
         print("🧪 Testing deployment...")
         
         try:
@@ -309,6 +379,15 @@ class CloudRunDeployer:
         for env_key, secret_name in secret_mappings.items():
             if env_key in env_vars:
                 try:
+                    # Check if secret already exists
+                    result = self.run_command([
+                        "gcloud", "secrets", "describe", secret_name
+                    ], check=False)
+                    
+                    if result.returncode == 0:
+                        print(f"✅ Secret {secret_name} already exists")
+                        continue
+                    
                     # Create secret
                     process = subprocess.Popen(
                         ["gcloud", "secrets", "create", secret_name],
@@ -317,9 +396,13 @@ class CloudRunDeployer:
                         stderr=subprocess.PIPE,
                         text=True
                     )
-                    process.communicate(input=env_vars[env_key])
+                    stdout, stderr = process.communicate(input=env_vars[env_key])
                     
-                    print(f"✅ Secret {secret_name} created")
+                    if process.returncode == 0:
+                        print(f"✅ Secret {secret_name} created")
+                    else:
+                        print(f"⚠️ Could not create secret {secret_name}: {stderr}")
+                        
                 except Exception as e:
                     print(f"⚠️ Could not create secret {secret_name}: {e}")
     
