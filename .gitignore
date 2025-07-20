@@ -71,6 +71,16 @@ coverage.xml
 .pytest_cache/
 cover/
 
+# Test-specific cache and temporary files
+server/test/.pytest_cache/
+server/test/__pycache__/
+server/test/*.pyc
+server/test/**/*.pyc
+server/test/.coverage*
+server/test/htmlcov/
+server/test/test_results.xml
+server/test/*.log
+
 # Jupyter Notebook
 .ipynb_checkpoints
 
@@ -86,6 +96,12 @@ server/uploaded_files/
 server/parsed_files/
 server/generated_questions/
 server/bm25_indexes/
+
+# Test package data directories (should not be tracked)
+server/test/uploaded_files/
+server/test/parsed_files/
+server/test/generated_questions/
+server/test/bm25_indexes/
 
 # Client cache
 client/__pycache__/
@@ -215,6 +231,13 @@ $RECYCLE.BIN/
 sample_data.csv
 excel_data.db
 test_*.db
+
+# Test package temporary data files
+server/test/temp_*
+server/test/mock_*
+server/test/*_temp.*
+server/test/test_data_*
+server/test/*.tmp
 
 # Node.js (if any frontend tools are used)
 node_modules/

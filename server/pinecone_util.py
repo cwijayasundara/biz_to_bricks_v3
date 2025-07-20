@@ -1,199 +1,190 @@
-from pinecone import Pinecone
-from dotenv import load_dotenv
 import os
-from pinecone import ServerlessSpec
-import time
+from dotenv import load_dotenv
+import pinecone
 from langchain_openai import OpenAIEmbeddings
-from typing import List
+from langchain_pinecone import PineconeVectorStore
+import logging
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
+# Load environment variables
 pinecone_api_key = os.getenv("PINECONE_API_KEY")
-pinecone_env = os.getenv("PINECONE_ENVIRONMENT", "gcp-starter")
 openai_api_key = os.getenv("OPENAI_API_KEY")
+pinecone_env = os.getenv("PINECONE_ENVIRONMENT", "gcp-starter")
 
-INDEX_NAME = "biz-to-bricks-vector-store-hybrid"
+# Import configuration constants
+from config import PINECONE_INDEX_NAME, PINECONE_NAMESPACE, EMBEDDING_MODEL_NAME, EMBEDDING_DIMENSION
 
+# Initialize OpenAI embeddings
 embeddings = OpenAIEmbeddings(api_key=openai_api_key, 
-                              model="text-embedding-3-large")
-
-pc = Pinecone(
-    api_key=pinecone_api_key,
-    environment=pinecone_env
-)
+                              model=EMBEDDING_MODEL_NAME)
 
 def create_index():
     """
-    This function creates a new Pinecone index if it doesn't exist.
+    Creates or connects to a Pinecone index for document storage.
+    Uses generic configuration constants for index name and namespace.
     """
     try:
+        # Initialize Pinecone
+        pc = pinecone.Pinecone(api_key=pinecone_api_key)
+        
         # Check if index exists
         existing_indexes = pc.list_indexes()
         
-        if INDEX_NAME not in existing_indexes.names():
-            print(f"Creating new Pinecone index: {INDEX_NAME}")
+        if PINECONE_INDEX_NAME not in existing_indexes.names():
+            print(f"Creating new Pinecone index: {PINECONE_INDEX_NAME}")
+            
+            # Create index with proper spec configuration for hybrid search
             pc.create_index(
-                name=INDEX_NAME,
-                dimension=3072,
-                metric="dotproduct",
-                spec=ServerlessSpec(
+                name=PINECONE_INDEX_NAME,
+                dimension=int(EMBEDDING_DIMENSION),  # OpenAI text-embedding-3-large dimension
+                metric="dotproduct",  # Required for hybrid search (dense + sparse)
+                spec=pinecone.ServerlessSpec(
                     cloud="aws",
                     region="us-east-1"
                 )
             )
-            # Wait for index to be ready
-            while not pc.describe_index(INDEX_NAME).status['ready']:
-                time.sleep(1)
-            print(f"Index {INDEX_NAME} created successfully")
-        else:
-            print(f"Using existing index: {INDEX_NAME}")
             
-        return pc.Index(INDEX_NAME)
+            # Wait for index to be ready
+            while not pc.describe_index(PINECONE_INDEX_NAME).status['ready']:
+                import time
+                time.sleep(1)
+            print(f"Index {PINECONE_INDEX_NAME} created successfully")
+        else:
+            print(f"Using existing index: {PINECONE_INDEX_NAME}")
+        
+        return pc.Index(PINECONE_INDEX_NAME)
+        
     except Exception as e:
-        print(f"Error creating/accessing index: {str(e)}")
+        logger.error(f"Error creating/connecting to Pinecone index: {e}")
         raise
 
-def document_exists_in_pinecone(file_name: str) -> bool:
+def test_pinecone_connection():
     """
-    Check if a document exists in the Pinecone index by looking for vectors
-    with the source metadata matching the file name.
-    
-    Args:
-        file_name: The name of the file to check
-        
-    Returns:
-        bool: True if the document exists, False otherwise
+    Test the connection to Pinecone and verify index accessibility.
     """
-    print(f"Checking if {file_name} exists in Pinecone")
     try:
         index = create_index()
-        namespace = "biz-to-bricks-namespace"
         
-        # Try to fetch metadata about the index
+        # Get index statistics
         stats = index.describe_index_stats()
+        print(f"Index statistics: {stats}")
+        
+        # Test namespace access
+        namespace = PINECONE_NAMESPACE
         
         # Check if the namespace exists
         if namespace not in stats.get('namespaces', {}):
             print(f"Namespace '{namespace}' not found in index")
+            print(f"Available namespaces: {list(stats.get('namespaces', {}).keys())}")
             return False
         
-        # Query the index with a proper embedding to find matching documents
-        # Use a simple search to find any vectors with matching source metadata
-        try:
-            # Create a simple query embedding
-            query_embedding = embeddings.embed_query("document check")
-            
-            query_response = index.query(
-                vector=query_embedding,
-                top_k=100,  # Get more results to ensure we find matches
-                include_metadata=True,
-                namespace=namespace,
-                filter={"source": file_name}
-            )
-            
-            # If we get any matches, the document exists
-            document_exists = len(query_response.get('matches', [])) > 0
-            print(f"Document {file_name} {'exists' if document_exists else 'does not exist'} in Pinecone")
-            
-            # Also check if there are vectors with the expected ID pattern
-            base_filename = file_name.split(".")[0] if "." in file_name else file_name
-            expected_id = f"{base_filename}_doc"
-            
-            # Try to fetch by ID as well
-            try:
-                fetch_response = index.fetch(ids=[expected_id], namespace=namespace)
-                if hasattr(fetch_response, 'vectors') and fetch_response.vectors:
-                    print(f"Found document by ID: {expected_id}")
-                    return True
-                elif hasattr(fetch_response, 'get') and fetch_response.get('vectors', {}):
-                    print(f"Found document by ID: {expected_id}")
-                    return True
-            except Exception as fetch_error:
-                print(f"Could not fetch by ID {expected_id}: {fetch_error}")
-            
-            return document_exists
-            
-        except Exception as query_error:
-            print(f"Error querying for document {file_name}: {query_error}")
-            return False
-    
-    except Exception as e:
-        print(f"Error checking if document exists: {e}")
-        return False
-
-
-def delete_document_from_pinecone(file_name: str) -> bool:
-    """
-    Delete all vectors for a specific document from the Pinecone index.
-    
-    Args:
-        file_name: The name of the file to delete from Pinecone
-        
-    Returns:
-        bool: True if deletion was successful, False otherwise
-    """
-    print(f"Deleting document {file_name} from Pinecone")
-    try:
-        index = create_index()
-        namespace = "biz-to-bricks-namespace"
-        
-        # Delete vectors matching the source filter
-        delete_response = index.delete(
-            filter={"source": file_name},
-            namespace=namespace
-        )
-        
-        print(f"Successfully deleted document {file_name} from Pinecone")
+        print(f"Successfully connected to Pinecone index: {PINECONE_INDEX_NAME}")
+        print(f"Using namespace: {namespace}")
         return True
         
     except Exception as e:
-        print(f"Error deleting document {file_name} from Pinecone: {e}")
+        logger.error(f"Error testing Pinecone connection: {e}")
         return False
 
-
-def get_available_source_documents() -> List[str]:
+def test_vector_operations():
     """
-    Get a list of all available source documents in the Pinecone index.
-    
-    Returns:
-        List[str]: List of unique source document names
+    Test basic vector operations to ensure the index is working correctly.
     """
-    print("Getting available source documents from Pinecone")
     try:
         index = create_index()
-        namespace = "biz-to-bricks-namespace"
+        
+        # Test vector
+        test_vector = [0.1] * int(EMBEDDING_DIMENSION)  # OpenAI text-embedding-3-large dimension
+        test_id = "test_vector_001"
+        namespace = PINECONE_NAMESPACE
+        
+        # Upsert test vector
+        index.upsert(
+            vectors=[(test_id, test_vector, {"test": "data"})],
+            namespace=namespace
+        )
+        print(f"Successfully upserted test vector to namespace: {namespace}")
+        
+        # Fetch test vector
+        fetch_response = index.fetch(ids=[test_id], namespace=namespace)
+        if test_id in fetch_response['vectors']:
+            print("Successfully fetched test vector")
+        else:
+            print("Failed to fetch test vector")
+            return False
+        
+        # Delete test vector
+        index.delete(ids=[test_id], namespace=namespace)
+        print("Successfully deleted test vector")
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error testing vector operations: {e}")
+        return False
+
+def list_all_vectors():
+    """
+    List all vectors in the index with their metadata.
+    """
+    try:
+        index = create_index()
+        
+        # Get index statistics
+        stats = index.describe_index_stats()
+        namespace = PINECONE_NAMESPACE
         
         # Check if the namespace exists
-        stats = index.describe_index_stats()
         if namespace not in stats.get('namespaces', {}):
             print(f"Namespace '{namespace}' not found in index")
             return []
         
-        # Query to get all vectors with metadata (we'll extract unique sources)
-        # Since we can't directly query for all unique metadata values,
-        # we'll use a broad search to get many documents and extract unique sources
-        query_embedding = embeddings.embed_query("document")
+        namespace_stats = stats['namespaces'][namespace]
+        print(f"Namespace '{namespace}' contains {namespace_stats['vector_count']} vectors")
         
-        # Get a large number of results to capture all documents
+        # Query to get all vectors (limited to avoid memory issues)
         query_response = index.query(
-            vector=query_embedding,
-            top_k=10000,  # Large number to get all documents
+            vector=[0.0] * int(EMBEDDING_DIMENSION),  # Dummy vector for query
+            top_k=1000,  # Limit results
             include_metadata=True,
             namespace=namespace
         )
         
-        # Extract unique source documents
-        sources = set()
+        vectors = []
         for match in query_response.get('matches', []):
-            metadata = match.get('metadata', {})
-            source = metadata.get('source')
-            if source:
-                sources.add(source)
+            vector_info = {
+                'id': match['id'],
+                'score': match['score'],
+                'metadata': match.get('metadata', {})
+            }
+            vectors.append(vector_info)
         
-        source_list = sorted(list(sources))
-        print(f"Found {len(source_list)} unique source documents: {source_list}")
-        return source_list
+        return vectors
         
     except Exception as e:
-        print(f"Error getting source documents: {e}")
+        logger.error(f"Error listing vectors: {e}")
         return []
+
+def delete_all_vectors():
+    """
+    Delete all vectors from the index (use with caution).
+    """
+    try:
+        index = create_index()
+        namespace = PINECONE_NAMESPACE
+        
+        # Delete all vectors in the namespace
+        index.delete(
+            delete_all=True,
+            namespace=namespace
+        )
+        
+        print(f"Successfully deleted all vectors from namespace: {namespace}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error deleting all vectors: {e}")
+        return False

@@ -10,6 +10,7 @@ from langchain_openai import ChatOpenAI
 from langchain_experimental.agents import create_pandas_dataframe_agent
 from dotenv import load_dotenv
 from pathlib import Path
+from config import LLM_MODEL_NAME
 
 # Load environment variables
 load_dotenv()
@@ -19,13 +20,13 @@ class ExcelAgent:
     An Excel/CSV agent using LangChain's pandas agent
     """
     
-    def __init__(self, file_path: str, model: str = "gpt-4.1-mini"):
+    def __init__(self, file_path: str, model: str = LLM_MODEL_NAME):
         """
         Initialize the Excel Agent
         
         Args:
             file_path: Path to the Excel or CSV file
-            model: OpenAI model to use (default: gpt-4.1-mini)
+            model: OpenAI model to use (default: from config)
         """
         self.file_path = file_path
         self.model = model
@@ -265,7 +266,7 @@ Use the DataFrame 'df' that is already loaded. Run the code and return the actua
         self.close()
 
 
-def create_excel_agent(file_path: str, model: str = "gpt-4.1-mini") -> ExcelAgent:
+def create_excel_agent(file_path: str, model: str = LLM_MODEL_NAME) -> ExcelAgent:
     """
     Factory function to create an Excel Agent
     

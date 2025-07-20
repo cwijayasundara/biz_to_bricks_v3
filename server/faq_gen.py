@@ -2,12 +2,13 @@ from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 import os
 import pathlib
+from config import LLM_MODEL_NAME
 
 load_dotenv()
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-llm = ChatOpenAI(model="gpt-4.1-mini", 
+llm = ChatOpenAI(model=LLM_MODEL_NAME, 
                  api_key=OPENAI_API_KEY)
 
 FAQ_GEN_PROMPT = """

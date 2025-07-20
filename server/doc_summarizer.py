@@ -5,13 +5,14 @@ from langchain.chat_models import init_chat_model
 import os
 from dotenv import load_dotenv
 import pathlib
+from config import LLM_MODEL_NAME, LLM_PROVIDER
 
 load_dotenv()
 
 api_key = os.getenv("OPENAI_API_KEY")
 
-llm = init_chat_model("gpt-4.1-mini", 
-                      model_provider="openai",
+llm = init_chat_model(LLM_MODEL_NAME, 
+                      model_provider=LLM_PROVIDER,
                       api_key=api_key)
 
 prompt = ChatPromptTemplate.from_messages(

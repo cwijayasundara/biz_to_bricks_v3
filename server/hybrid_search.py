@@ -1,6 +1,8 @@
 import os
 from dotenv import load_dotenv
 import time
+import json
+import numpy as np
 from langchain_community.retrievers import PineconeHybridSearchRetriever
 from langchain.chat_models import init_chat_model
 from langchain_openai import OpenAIEmbeddings
@@ -13,6 +15,7 @@ from langchain.prompts import ChatPromptTemplate
 from file_util_enhanced import get_file_manager
 import tempfile
 import logging
+from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -23,19 +26,60 @@ pinecone_api_key = os.getenv("PINECONE_API_KEY")
 openai_api_key = os.getenv("OPENAI_API_KEY")
 pinecone_env = os.getenv("PINECONE_ENVIRONMENT", "gcp-starter")
 
-# Constants
-BM25_INDEX_DIR = "bm25_indexes"
+# Import configuration constants
+from config import PINECONE_NAMESPACE, BM25_INDEXES_PATH, LLM_MODEL_NAME, LLM_PROVIDER, EMBEDDING_MODEL_NAME
 
 # Initialize file manager
 file_manager = get_file_manager()
 
 # Initialize OpenAI LLM and embeddings
-llm = init_chat_model("gpt-4.1-mini", 
-                      model_provider="openai",
+llm = init_chat_model(LLM_MODEL_NAME, 
+                      model_provider=LLM_PROVIDER,
                       api_key=openai_api_key)
     
 embeddings = OpenAIEmbeddings(api_key=openai_api_key, 
-                              model="text-embedding-3-large")
+                              model=EMBEDDING_MODEL_NAME)
+
+# Constants for configuration
+BM25_ALPHA = 0.3  # Favor BM25 (sparse) for exact name matches
+TOP_K_RESULTS = 10  # Retrieve more documents for better coverage
+CHUNK_SIZE = 4000  # Text chunk size for processing
+CHUNK_OVERLAP = 200  # Overlap between chunks
+
+def load_bm25_encoder_from_file(file_content: str, file_name: str) -> BM25Encoder:
+    """
+    Load a BM25 encoder from file content.
+    
+    Args:
+        file_content: JSON content of the encoder file
+        file_name: Name of the file for logging
+        
+    Returns:
+        BM25Encoder: The loaded encoder
+    """
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as temp_file:
+            temp_file.write(file_content)
+            temp_file_path = temp_file.name
+        
+        try:
+            # Load the JSON data and reconstruct the encoder
+            encoder_data = json.loads(file_content)
+            encoder = BM25Encoder()
+            encoder.doc_freq = encoder_data['doc_freq']
+            encoder.n_docs = encoder_data['n_docs']
+            encoder.avgdl = encoder_data['avgdl']
+            encoder.k1 = encoder_data['k1']
+            encoder.b = encoder_data['b']
+            logger.info(f"Successfully loaded encoder from {file_name}")
+            return encoder
+        finally:
+            # Clean up temporary file
+            os.unlink(temp_file_path)
+            
+    except Exception as e:
+        logger.error(f"Error loading encoder from {file_name}: {e}")
+        raise
 
 def create_bm25_encoder():
     """
@@ -47,60 +91,42 @@ def create_bm25_encoder():
     """
     try:
         # Get list of BM25 index files using file manager (auto-detects local/cloud)
-        logger.info(f"Loading BM25 indexes from directory: {BM25_INDEX_DIR}")
-        bm25_files = file_manager.list_files(BM25_INDEX_DIR)
+        logger.info(f"Loading BM25 indexes from directory: {BM25_INDEXES_PATH}")
+        bm25_files = file_manager.list_files(BM25_INDEXES_PATH)
         json_files = [f for f in bm25_files if f.endswith('.json')]
         
         logger.info(f"Found {len(json_files)} BM25 index files: {json_files}")
         
-        if json_files:
-            # Load the first encoder as base
-            first_file = json_files[0]
-            logger.info(f"Loading base encoder from: {first_file}")
-            
-            # Load the file content and create a temporary file for BM25Encoder
-            file_content = file_manager.load_file(BM25_INDEX_DIR, first_file)
-            
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as temp_file:
-                temp_file.write(file_content)
-                temp_file_path = temp_file.name
-            
-            try:
-                base_encoder = BM25Encoder().load(temp_file_path)
-                logger.info(f"Successfully loaded base encoder from {first_file}")
-            finally:
-                # Clean up temporary file
-                os.unlink(temp_file_path)
-            
-            # Merge additional encoders if any
-            if len(json_files) > 1:
-                logger.info(f"Merging {len(json_files) - 1} additional encoders")
-                for file_name in json_files[1:]:
-                    try:
-                        # Load additional encoder file
-                        additional_content = file_manager.load_file(BM25_INDEX_DIR, file_name)
-                        
-                        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as temp_file:
-                            temp_file.write(additional_content)
-                            temp_file_path = temp_file.name
-                        
-                        try:
-                            additional_encoder = BM25Encoder().load(temp_file_path)
-                            # Merge encoders by updating vocabulary and document frequencies
-                            base_encoder.merge_encoder(additional_encoder)
-                            logger.info(f"Successfully merged encoder from {file_name}")
-                        finally:
-                            # Clean up temporary file
-                            os.unlink(temp_file_path)
-                            
-                    except Exception as e:
-                        logger.error(f"Error loading encoder from {file_name}: {e}")
-            
-            logger.info("BM25 encoder created successfully with merged indexes")
-            return base_encoder
-        else:
+        if not json_files:
             logger.warning("No BM25 index files found, using default encoder")
             return BM25Encoder().default()
+        
+        # Load the first encoder as base
+        first_file = json_files[0]
+        logger.info(f"Loading base encoder from: {first_file}")
+        
+        # Load the file content
+        file_content = file_manager.load_file(BM25_INDEXES_PATH, first_file)
+        base_encoder = load_bm25_encoder_from_file(file_content, first_file)
+        
+        # Merge additional encoders if any
+        if len(json_files) > 1:
+            logger.info(f"Merging {len(json_files) - 1} additional encoders")
+            for file_name in json_files[1:]:
+                try:
+                    # Load additional encoder file
+                    additional_content = file_manager.load_file(BM25_INDEXES_PATH, file_name)
+                    additional_encoder = load_bm25_encoder_from_file(additional_content, file_name)
+                    
+                    # Merge encoders by updating vocabulary and document frequencies
+                    base_encoder.merge_encoder(additional_encoder)
+                    logger.info(f"Successfully merged encoder from {file_name}")
+                    
+                except Exception as e:
+                    logger.error(f"Error loading encoder from {file_name}: {e}")
+        
+        logger.info("BM25 encoder created successfully with merged indexes")
+        return base_encoder
             
     except Exception as e:
         logger.error(f"Error loading BM25 encoders: {e}")
@@ -125,9 +151,9 @@ def create_hybrid_retriever():
             sparse_encoder=bm25_encoder, 
             index=index,
             text_key="text",
-            alpha=0.3,  # Favor BM25 (sparse) for exact name matches
-            top_k=10,   # Retrieve more documents for better coverage
-            namespace="biz-to-bricks-namespace"
+            alpha=BM25_ALPHA,  # Favor BM25 (sparse) for exact name matches
+            top_k=TOP_K_RESULTS,   # Retrieve more documents for better coverage
+            namespace=PINECONE_NAMESPACE
         )
         
         logger.info("Hybrid search retriever created successfully")    
@@ -137,14 +163,16 @@ def create_hybrid_retriever():
         logger.error(f"Error creating retriever: {e}")
         raise
 
-
-def get_filtered_documents(query, source_document):
+def get_filtered_documents(query: str, source_document: str) -> List[Any]:
     """
     Get documents filtered by source document using direct index query.
     
     Args:
         query: The search query
         source_document: The source document name to filter by
+        
+    Returns:
+        List of LangChain Document objects
     """
     try:
         logger.info(f"Getting filtered documents for source: {source_document}")
@@ -156,9 +184,9 @@ def get_filtered_documents(query, source_document):
         # Query Pinecone with source filter
         query_response = index.query(
             vector=query_embedding,
-            top_k=10,
+            top_k=TOP_K_RESULTS,
             include_metadata=True,
-            namespace="biz-to-bricks-namespace",
+            namespace=PINECONE_NAMESPACE,
             filter={"source": source_document}
         )
         
@@ -188,8 +216,16 @@ def get_filtered_documents(query, source_document):
 logger.info("Initializing hybrid search retriever...")
 retriever = create_hybrid_retriever()
 
-def format_docs(docs):
-    """Format the documents into a string with enhanced context."""
+def format_docs(docs: List[Any]) -> str:
+    """
+    Format the documents into a string with enhanced context.
+    
+    Args:
+        docs: List of LangChain Document objects
+        
+    Returns:
+        Formatted string with document content
+    """
     if not docs:
         return "No relevant documents found."
     
@@ -234,10 +270,20 @@ hybrid_chain = (
     | StrOutputParser()
 )
 
-def execure_hybrid_chain(query, source_document=None):
-    """Execute the hybrid chain with enhanced logging and debugging."""
+def execure_hybrid_chain(query: str, source_document: Optional[str] = None) -> str:
+    """
+    Execute the hybrid chain with enhanced logging and debugging.
+    
+    Args:
+        query: The search query
+        source_document: Optional source document to filter by
+        
+    Returns:
+        Search result as string
+    """
     filter_info = f" (filtered by: {source_document})" if source_document else ""
     logger.info(f"Executing hybrid search for query: {query}{filter_info}")
+    
     try:
         # Log the retrieval process for debugging
         logger.info("Retrieving relevant documents...")
@@ -273,14 +319,25 @@ def execure_hybrid_chain(query, source_document=None):
             
         logger.info("Hybrid search completed successfully")
         return result
+        
     except Exception as e:
         logger.error(f"Error executing hybrid search: {e}")
         raise
 
-def search_with_debug_info(query, source_document=None):
-    """Execute search and return both result and debug information."""
+def search_with_debug_info(query: str, source_document: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Execute search and return both result and debug information.
+    
+    Args:
+        query: The search query
+        source_document: Optional source document to filter by
+        
+    Returns:
+        Dictionary with result and debug information
+    """
     filter_info = f" (filtered by: {source_document})" if source_document else ""
     logger.info(f"Executing debug search for query: {query}{filter_info}")
+    
     try:
         # Get documents for debugging
         if source_document:
@@ -317,6 +374,7 @@ def search_with_debug_info(query, source_document=None):
             "result": result,
             "debug": debug_info
         }
+        
     except Exception as e:
         logger.error(f"Error in debug search: {e}")
         raise
