@@ -22,10 +22,16 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-# Load environment variables
+# Load environment variables with validation
 pinecone_api_key = os.getenv("PINECONE_API_KEY")
 openai_api_key = os.getenv("OPENAI_API_KEY")
 pinecone_env = os.getenv("PINECONE_ENVIRONMENT", "gcp-starter")
+
+# Clean up API keys by removing quotes if present (common deployment issue)
+if pinecone_api_key:
+    pinecone_api_key = pinecone_api_key.strip("\"'")
+if openai_api_key:
+    openai_api_key = openai_api_key.strip("\"'")
 
 # Import configuration constants
 from config import PINECONE_NAMESPACE, BM25_INDEXES_PATH, LLM_MODEL_NAME, LLM_PROVIDER, EMBEDDING_MODEL_NAME
@@ -327,19 +333,39 @@ def get_filtered_documents(query: str, source_document: str) -> List[Any]:
     """
     try:
         logger.info(f"Getting filtered documents for source: {source_document}")
-        index = create_index()
+        
+        # Debug: Check API key availability
+        if not pinecone_api_key:
+            logger.error("PINECONE_API_KEY is not set!")
+            raise ValueError("Pinecone API key not configured")
+        
+        logger.info(f"Using Pinecone API key: {pinecone_api_key[:8]}...")
+        logger.info(f"Using Pinecone namespace: {PINECONE_NAMESPACE}")
+        
+        # Create index with error handling
+        try:
+            index = create_index()
+            logger.info("✅ Pinecone index connection successful")
+        except Exception as pinecone_error:
+            logger.error(f"❌ Pinecone index connection failed: {pinecone_error}")
+            raise
         
         # Create query embedding
         query_embedding = get_embeddings().embed_query(query)
         
         # Query Pinecone with source filter
-        query_response = index.query(
-            vector=query_embedding,
-            top_k=TOP_K_RESULTS,
-            include_metadata=True,
-            namespace=PINECONE_NAMESPACE,
-            filter={"source": source_document}
-        )
+        try:
+            query_response = index.query(
+                vector=query_embedding,
+                top_k=TOP_K_RESULTS,
+                include_metadata=True,
+                namespace=PINECONE_NAMESPACE,
+                filter={"source": source_document}
+            )
+            logger.info(f"✅ Pinecone query successful, found {len(query_response.get('matches', []))} matches")
+        except Exception as query_error:
+            logger.error(f"❌ Pinecone query failed: {query_error}")
+            raise
         
         # Convert to LangChain Document objects
         from langchain_core.documents import Document

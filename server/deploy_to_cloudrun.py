@@ -111,12 +111,12 @@ class CloudRunDeployer:
         env_file = Path(".env")
         if not env_file.exists():
             print("❌ .env file not found. Please create it with your API keys.")
-            print("Required keys: OPENAI_API_KEY, LLAMA_CLOUD_API_KEY, PINECONE_API_KEY, PINECONE_ENVIRONMENT")
+            print("Required keys: OPENAI_API_KEY, LLAMA_CLOUD_API_KEY, PINECONE_API_KEY, PINECONE_ENVIRONMENT, PINECONE_NAMESPACE")
             sys.exit(1)
         print("✅ .env file found")
         
         # Validate .env file has required keys
-        required_keys = ["OPENAI_API_KEY", "LLAMA_CLOUD_API_KEY", "PINECONE_API_KEY", "PINECONE_ENVIRONMENT"]
+        required_keys = ["OPENAI_API_KEY", "LLAMA_CLOUD_API_KEY", "PINECONE_API_KEY", "PINECONE_ENVIRONMENT", "PINECONE_NAMESPACE"]
         env_content = env_file.read_text()
         missing_keys = [key for key in required_keys if key not in env_content]
         if missing_keys:
@@ -132,6 +132,8 @@ class CloudRunDeployer:
                 line = line.strip()
                 if line and not line.startswith("#") and "=" in line:
                     key, value = line.split("=", 1)
+                    # Clean up quotes from values (common deployment issue)
+                    value = value.strip("\"'")
                     env_vars[key] = value
         return env_vars
     

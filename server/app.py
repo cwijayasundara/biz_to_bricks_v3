@@ -634,6 +634,49 @@ async def query_pandas_agent(search_query: SearchQuery):
         )
 
 
+@app.get("/debug/environment/")
+async def debug_environment():
+    """Debug endpoint to check environment configuration (for troubleshooting)."""
+    try:
+        import os
+        env_info = {}
+        
+        # Check key environment variables (without exposing secrets)
+        env_vars = ["PINECONE_ENVIRONMENT", "PINECONE_INDEX_NAME", "PINECONE_NAMESPACE", 
+                   "LLM_MODEL_NAME", "EMBEDDING_MODEL_NAME"]
+        
+        for var in env_vars:
+            value = os.getenv(var)
+            env_info[var] = value if value else "NOT SET"
+        
+        # Check API keys (show only if they exist, not the actual values)
+        api_keys = ["PINECONE_API_KEY", "OPENAI_API_KEY", "LLAMA_CLOUD_API_KEY"]
+        for key in api_keys:
+            value = os.getenv(key)
+            if value:
+                cleaned_value = value.strip("\"'")
+                env_info[key] = f"SET (length: {len(cleaned_value)})"
+            else:
+                env_info[key] = "NOT SET"
+        
+        # Test Pinecone connection
+        try:
+            from pinecone_util import create_index
+            index = create_index()
+            stats = index.describe_index_stats()
+            env_info["pinecone_connection"] = "SUCCESS"
+            env_info["pinecone_stats"] = {
+                "total_vectors": stats.get("total_vector_count", 0),
+                "namespaces": list(stats.get("namespaces", {}).keys())
+            }
+        except Exception as pinecone_error:
+            env_info["pinecone_connection"] = f"FAILED: {str(pinecone_error)}"
+        
+        return {"status": "success", "environment": env_info}
+        
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
 @app.get("/sourcedocuments/", response_model=FilesListResponse)
 async def get_source_documents():
     """Get a list of all available source documents from parsed files and uploaded Excel/CSV files."""

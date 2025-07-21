@@ -22,7 +22,8 @@ class Colors:
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
 
-app_url_local = "http://localhost:8004"
+    # app_url_local = "http://localhost:8004"
+    app_url_cloud_run = "https://document-processing-service-yawfj7f47q-uc.a.run.app"
 
 def print_header(text: str):
     """Print a formatted header."""

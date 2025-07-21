@@ -16,9 +16,16 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
+# Load environment variables with validation
 pinecone_api_key = os.getenv("PINECONE_API_KEY")
 openai_api_key = os.getenv("OPENAI_API_KEY")
 pinecone_env = os.getenv("PINECONE_ENVIRONMENT", "gcp-starter")
+
+# Clean up API keys by removing quotes if present (common deployment issue)
+if pinecone_api_key:
+    pinecone_api_key = pinecone_api_key.strip("\"'")
+if openai_api_key:
+    openai_api_key = openai_api_key.strip("\"'")
 
 # Import configuration constants
 from config import PINECONE_NAMESPACE, BM25_INDEXES_PATH, EMBEDDING_MODEL_NAME

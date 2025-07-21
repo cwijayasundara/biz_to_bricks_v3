@@ -30,7 +30,8 @@ class Config:
     """Application configuration settings"""
     
     # API Configuration
-    BASE_URL = "http://localhost:8004"
+    # BASE_URL = "http://localhost:8004"
+    BASE_URL = "https://document-processing-service-yawfj7f47q-uc.a.run.app"
     
     # API Endpoints
     ENDPOINTS = {
