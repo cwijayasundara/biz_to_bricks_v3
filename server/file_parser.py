@@ -150,17 +150,20 @@ def get_text_nodes(json_list: List[dict]) -> List[TextNode]:
     return text_nodes
 
 system_prompt = """
-You are a helpful file parser that can parse a file into a list of text nodes without losing any information.
-IMPORTANT: Preserve ALL content from the original document including:
-- All text fields and values
-- All table data and structure
-- All headers, titles, and labels
-- All formatting and layout information
-- All metadata and field names
-- All numerical values and units
-- All special characters and symbols
+You are a comprehensive document parser that must capture EVERY piece of information from the document.
 
-Do not drop, summarize, or omit any content from the original document.
+CRITICAL REQUIREMENTS:
+1. Extract ALL text content including headers, footers, titles, labels, and field names
+2. Preserve ALL form fields and their values (e.g., "Prepared by: [value]", "Date: [value]", "Lot #: [value]")  
+3. Capture ALL table data including headers, cells, and any merged cells
+4. Include ALL metadata, annotations, and formatting information
+5. Extract text from ALL areas of the page including margins, headers, footers, and sidebars
+6. Do NOT skip or summarize any content - include everything verbatim
+7. Pay special attention to form fields like "Prepared by:", "Date:", "Product:", etc.
+8. Include any handwritten or filled-in information
+9. Preserve document structure and layout information
+
+IMPORTANT: Every word, number, symbol, and field in the original document must appear in your output.
 """
 
 def initialize_parser(file_path: str = None):
@@ -172,17 +175,18 @@ def initialize_parser(file_path: str = None):
         file_path: Optional file path to determine appropriate parser settings
     """
     try:
-        print(f"🔧 Using LlamaParse for all file types: {file_path}")
+        print(f"🔧 Using LlamaParse with enhanced content preservation: {file_path}")
         parser = LlamaParse(
-            result_type="text",  # Use text instead of markdown to avoid validation issues
+            result_type="text",  # Text mode captures more header/form content than markdown
             use_vendor_multimodal_model=True,
             vendor_multimodal_model_name="gemini-2.0-flash-001",
             invalidate_cache=True,
             system_prompt=system_prompt,
-            # Optimized settings for content preservation and cleaning
+            # Optimized settings for maximum content preservation
             num_workers=1,  # Use single worker for better consistency
             verbose=True,    # Enable verbose logging for debugging
             language="en",   # Specify language for better parsing
+            split_by_page=False,  # Don't split to preserve context across pages
         )
         return parser
     except Exception as e:
@@ -319,20 +323,48 @@ def parse_file_with_llama_parse(file_path: str,
                 # Use the proper LlamaParse API method to get documents
                 result = parser.parse(file_path)
                 
-                # Get text documents and convert to markdown
-                documents = result.get_text_documents(split_by_page=True)
+                # Extract content directly from pages (which contain the actual markdown)
+                pages = result.pages if hasattr(result, 'pages') else []
                 
-                if documents and len(documents) > 0:
+                if pages and len(pages) > 0:
                     print(f"Successfully parsed file on attempt {attempt + 1}")
-                    print(f"Number of documents found: {len(documents)}")
+                    print(f"Number of pages found: {len(pages)}")
                     
-                    # Extract text content from documents
-                    text_content = "\n\n".join([doc.text for doc in documents])
+                    # Extract markdown content from pages
+                    page_contents = []
+                    for i, page in enumerate(pages):
+                        page_content = ""
+                        
+                        # Get markdown content from page
+                        if hasattr(page, 'md') and page.md:
+                            page_content = page.md
+                            print(f"Page {i+1}: Found {len(page_content)} characters in md field")
+                        elif hasattr(page, 'text') and page.text:
+                            page_content = page.text
+                            print(f"Page {i+1}: Found {len(page_content)} characters in text field")
+                        else:
+                            print(f"Page {i+1}: No content found in md or text fields")
+                            continue
+                        
+                        if page_content.strip():  # Only add non-empty content
+                            page_contents.append(page_content)
+                    
+                    if not page_contents:
+                        print("Warning: No content found in any pages")
+                        # Fallback to the old method
+                        documents = result.get_text_documents(split_by_page=True)
+                        if documents:
+                            text_content = "\n\n".join([doc.text or "" for doc in documents])
+                        else:
+                            text_content = ""
+                    else:
+                        # Combine all page contents
+                        text_content = "\n\n".join(page_contents)
                     
                     # Clean up any remaining artifacts
                     text_content = text_content.replace("```text", "").replace("```", "")
                     
-                    # Convert HTML tables to Markdown tables
+                    # Convert HTML tables to Markdown tables (if any remain)
                     text_content = convert_html_tables_to_markdown(text_content)
                     
                     # Clean up NaN values and formatting issues
@@ -341,6 +373,7 @@ def parse_file_with_llama_parse(file_path: str,
                     # Get metadata from the result
                     metadata = result.metadata if hasattr(result, 'metadata') else {}
                     
+                    print(f"Final content length: {len(text_content)} characters")
                     return text_content, metadata
                 
                 if attempt < max_retries - 1:

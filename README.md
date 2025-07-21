@@ -206,7 +206,7 @@ cp .env.example .env  # Edit with your keys
 ```bash
 cd server
 pip install -r requirements.txt
-python start_server.py --storage local --reload
+python3 start_server.py --storage local --reload
 ```
 
 **3. Start the Frontend Client (New Terminal):**

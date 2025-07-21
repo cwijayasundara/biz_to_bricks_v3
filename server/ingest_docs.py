@@ -26,6 +26,76 @@ from config import PINECONE_NAMESPACE, BM25_INDEXES_PATH, EMBEDDING_MODEL_NAME
 # Initialize file manager
 file_manager = get_file_manager()
 
+def cleanup_duplicate_vectors(source_filename: str):
+    """
+    Utility function to clean up all duplicate vectors for a given source file.
+    This can be called independently to clean up the database.
+    
+    Args:
+        source_filename: The source filename to clean up (e.g., "Sample2.pdf")
+    """
+    try:
+        logger.info(f"🧹 Starting comprehensive cleanup for: {source_filename}")
+        index = create_index()
+        
+        # Get base filename without extension
+        base_filename = source_filename.split(".")[0] if "." in source_filename else source_filename
+        
+        # Build comprehensive list of all possible source names
+        possible_source_names = set()
+        possible_source_names.add(source_filename)  # Full filename
+        possible_source_names.add(base_filename)    # Base filename
+        
+        # Add variations with different extensions
+        for ext in ['.pdf', '.docx', '.doc', '.txt', '.md', '.xlsx', '.xls', '.csv']:
+            possible_source_names.add(f"{base_filename}{ext}")
+        
+        logger.info(f"Searching for vectors with source names: {list(possible_source_names)}")
+        
+        # Delete vectors for each possible source name
+        total_deleted = 0
+        for source_name in possible_source_names:
+            try:
+                # Query first to count existing vectors
+                query_response = index.query(
+                    vector=[0.0] * 1536,  # Dummy vector for OpenAI embeddings
+                    top_k=10000,  # Large number to get all matches
+                    filter={"source": source_name},
+                    namespace=PINECONE_NAMESPACE,
+                    include_metadata=False
+                )
+                
+                if query_response.matches:
+                    count = len(query_response.matches)
+                    # Delete all vectors with this source
+                    index.delete(
+                        filter={"source": source_name},
+                        namespace=PINECONE_NAMESPACE
+                    )
+                    total_deleted += count
+                    logger.info(f"✅ Deleted {count} vectors for source: {source_name}")
+                    
+            except Exception as source_e:
+                logger.debug(f"No vectors found with source '{source_name}': {source_e}")
+        
+        # Also clean up by ID patterns
+        id_prefixes = {base_filename, source_filename.split(".")[0] if "." in source_filename else source_filename}
+        for id_prefix in id_prefixes:
+            try:
+                # Generate potential IDs and delete them
+                potential_ids = [f"{id_prefix}_chunk_{i}" for i in range(100)]  # Up to 100 chunks
+                index.delete(ids=potential_ids, namespace=PINECONE_NAMESPACE)
+                logger.info(f"🧹 Cleaned up ID patterns for: {id_prefix}")
+            except Exception as id_e:
+                logger.debug(f"ID cleanup for '{id_prefix}': {id_e}")
+        
+        logger.info(f"🎯 Cleanup complete! Total vectors deleted: {total_deleted}")
+        return total_deleted
+        
+    except Exception as e:
+        logger.error(f"Error during cleanup: {e}")
+        raise
+
 embeddings = OpenAIEmbeddings(api_key=openai_api_key, 
                               model=EMBEDDING_MODEL_NAME)
 
@@ -150,38 +220,100 @@ def ingest_documents_to_pinecone_hybrid(file_name: str):
                     "total_chunks": len(chunks)
                 }
             
-            # Create document and ID for this chunk
+            # Create document and ID for this chunk using consistent naming
             doc = Document(page_content=chunk, metadata=chunk_metadata)
             documents.append(doc)
-            document_ids.append(f"{base_filename}_chunk_{i}")
+            
+            # Use original filename base for consistent ID generation
+            id_base = original_filename.split(".")[0] if "." in original_filename else original_filename
+            document_ids.append(f"{id_base}_chunk_{i}")
 
         logger.info("Creating/accessing Pinecone index...")
         index = create_index()
 
-        # Check if document already exists and delete old vectors
-        logger.info(f"Checking for existing document: {file_name}")
-        try:
-            # Delete any existing vectors for this document using proper source metadata
-            # We need to try multiple possible source names for backward compatibility
-            index.delete(
-                filter={"source": original_filename},
-                namespace=PINECONE_NAMESPACE
-            )
-            logger.info(f"Deleted existing vectors for document with source: {original_filename}")
+        # Enhanced duplicate prevention: Delete ALL possible variations of this document
+        logger.info(f"Performing comprehensive cleanup for document: {file_name}")
+        
+        # Build list of all possible source names this document might have been stored under
+        possible_source_names = set()
+        
+        # Add the current source name (with extension)
+        possible_source_names.add(original_filename)
+        
+        # Add base filename (without extension) for legacy compatibility
+        possible_source_names.add(base_filename)
+        
+        # Add the passed filename as-is
+        if file_name not in possible_source_names:
+            possible_source_names.add(file_name)
             
-            # Also try to delete vectors with the old format (base filename only) for cleanup
+        # If original filename is different from file_name, add that too
+        if original_filename != file_name:
+            base_original = original_filename.split(".")[0] if "." in original_filename else original_filename
+            possible_source_names.add(base_original)
+        
+        # Add common extensions that might have been used
+        file_base = base_filename
+        for ext in ['.pdf', '.docx', '.doc', '.txt', '.md', '.xlsx', '.xls', '.csv']:
+            possible_source_names.add(f"{file_base}{ext}")
+        
+        logger.info(f"Checking for existing vectors with source names: {list(possible_source_names)}")
+        
+        # Delete vectors for each possible source name
+        deleted_count = 0
+        for source_name in possible_source_names:
             try:
-                base_filename = file_name.split(".")[0] if "." in file_name else file_name
-                index.delete(
-                    filter={"source": base_filename},
-                    namespace=PINECONE_NAMESPACE
+                # Query first to see if vectors exist with this source
+                query_response = index.query(
+                    vector=[0.0] * 1536,  # Dummy vector for OpenAI embeddings
+                    top_k=1,
+                    filter={"source": source_name},
+                    namespace=PINECONE_NAMESPACE,
+                    include_metadata=True
                 )
-                logger.info(f"Deleted legacy vectors with base filename: {base_filename}")
-            except Exception as legacy_e:
-                logger.debug(f"No legacy vectors found with base filename {base_filename}: {legacy_e}")
                 
-        except Exception as e:
-            logger.warning(f"Error deleting existing vectors (may not exist): {str(e)}")
+                if query_response.matches:
+                    # Delete vectors with this source
+                    index.delete(
+                        filter={"source": source_name},
+                        namespace=PINECONE_NAMESPACE
+                    )
+                    deleted_count += len(query_response.matches)
+                    logger.info(f"✅ Deleted existing vectors for source: {source_name}")
+                else:
+                    logger.debug(f"No existing vectors found for source: {source_name}")
+                    
+            except Exception as source_e:
+                logger.debug(f"No vectors found with source '{source_name}': {source_e}")
+        
+        if deleted_count > 0:
+            logger.info(f"🧹 Total cleanup: Deleted {deleted_count} existing vector(s) to prevent duplicates")
+        else:
+            logger.info("No existing vectors found to delete")
+            
+        # Additionally, delete by consistent ID pattern to catch any missed vectors
+        try:
+            # Generate all possible IDs that might exist for this document
+            possible_id_prefixes = set()
+            possible_id_prefixes.add(base_filename)
+            possible_id_prefixes.add(file_name.split(".")[0] if "." in file_name else file_name)
+            if original_filename:
+                possible_id_prefixes.add(original_filename.split(".")[0] if "." in original_filename else original_filename)
+            
+            for id_prefix in possible_id_prefixes:
+                try:
+                    # Generate potential IDs for chunks (assuming up to 50 chunks max)
+                    potential_ids = [f"{id_prefix}_chunk_{i}" for i in range(50)]
+                    
+                    # Try to delete these IDs (Pinecone will ignore non-existent ones)
+                    index.delete(ids=potential_ids, namespace=PINECONE_NAMESPACE)
+                    logger.info(f"🧹 Attempted ID-based cleanup for prefix: {id_prefix}")
+                    
+                except Exception as id_e:
+                    logger.debug(f"ID cleanup for prefix '{id_prefix}' completed: {id_e}")
+                    
+        except Exception as id_cleanup_e:
+            logger.debug(f"ID-based cleanup failed: {id_cleanup_e}")
 
         logger.info(f"Uploading {len(documents)} document chunks to Pinecone...")
         

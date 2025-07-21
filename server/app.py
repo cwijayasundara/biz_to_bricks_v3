@@ -59,7 +59,9 @@ from utils import (
 from api_docs import (
     API_DESCRIPTION,
     HYBRID_SEARCH_DESCRIPTION,
-    PANDAS_QUERY_DESCRIPTION
+    PANDAS_QUERY_DESCRIPTION,
+    INGEST_DOCUMENTS_DESCRIPTION,
+    PARSE_FILES_DESCRIPTION
 )
 
 # External dependencies
@@ -302,13 +304,13 @@ async def delete_file(
 @app.get(
     "/parsefile/{filename}",
     tags=["Document Processing"],
-    summary="Parse uploaded file to markdown format",
-    description="Convert uploaded files to structured markdown format using LlamaParse. Supports all file types with advanced document understanding."
+    summary="Enhanced document parsing with comprehensive content extraction",
+    description=PARSE_FILES_DESCRIPTION
 )
 async def parse_uploaded_file(
     filename: str = Path(..., description="Name of the uploaded file to parse (include file extension)")
 ):
-    """Parse an uploaded file into markdown format using LlamaParse AI."""
+    """Enhanced document parsing with comprehensive content extraction using advanced AI."""
     logger.info(f"Parsing file: {filename}")
     
     try:
@@ -431,9 +433,14 @@ async def save_content_and_ingest(
         )
 
 
-@app.post("/ingestdocuments/{filename}")
+@app.post(
+    "/ingestdocuments/{filename}",
+    tags=["Document Processing"],
+    summary="Advanced document indexing with duplicate prevention",
+    description=INGEST_DOCUMENTS_DESCRIPTION
+)
 async def ingest_documents(filename: str = Path(..., description="Name of the file to ingest")):
-    """Ingest documents to Pinecone and BM25 index."""
+    """Advanced document indexing with duplicate prevention and intelligent processing."""
     try:
         base_filename = FilePath(filename).stem
         logger.info(f"Ingesting documents for base filename: {base_filename}")
